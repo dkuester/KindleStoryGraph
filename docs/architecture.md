@@ -1,9 +1,11 @@
 # KindleStoryGraph — Architecture
 
-Status: **Phases 1–4 implemented** (reader, StoryGraph client, sync engine +
-daemon loop, KUAL packaging + cross-compile tooling + install/jailbreak docs).
-Only the on-device live sync test remains. This document is the implementable
-plan; it is refined as each phase lands.
+Status: **Phases 1–4 complete** (reader, StoryGraph client, sync engine + daemon
+loop, KUAL packaging + cross-compile tooling + install/jailbreak docs). The sync
+is verified on-device; an opt-in allowlist (KUAL menu selection), a
+`min_progress` threshold, manual `manual_mappings.ini` mapping and a manual-only
+mode are implemented on top. This document is the implementable plan; it is
+refined as each phase lands.
 
 ## 1. Goal
 
@@ -196,7 +198,9 @@ FW ≥ 5.16.3). Toolchain `arm-linux-gnueabihf-` (vs Kobo's
   test login + matching + updates against StoryGraph.
 - **Phase 3** ✅: daemon + state machine; host unit tests for the state machine.
 - **Phase 4** ✅: packaging (KUAL/MRPI/KPM) + install guide + jailbreak
-  prerequisite doc + i18n (EN/DE). Live sync test still pending on-device.
+  prerequisite doc + i18n (EN/DE). Live sync verified on-device. Follow-ups
+  (implemented): opt-in allowlist + KUAL menu selection, `min_progress`
+  threshold, `manual_mappings.ini` mapping, manual-only mode.
 
 ## 10. Risks & open questions
 
