@@ -29,7 +29,8 @@ Behandle diese wie Passwörter — sie gewähren vollen Zugriff auf dein Konto.
 1. Kindle per USB anschließen und einhängen.
 2. Den Ordner `kindlestorygraph` nach `/mnt/us/extensions/kindlestorygraph`
    kopieren (also `extensions/kindlestorygraph/` auf dem USB-Laufwerk). Er
-   enthält `config.xml`, `menu.json`, `config_example.ini` und `bin/` (Binary
+   enthält `config.xml`, `menu.json`, `config_example.ini`,
+   `allowlist.example.ini`, `manual_mappings.example.ini` und `bin/` (Binary
    + Startskripte).
 3. Kindle sicher auswerfen.
 
@@ -55,6 +56,8 @@ poll_interval=900
 match_threshold=0.6
 min_progress=2.0
 manual_mappings_path=/mnt/us/extensions/kindlestorygraph/manual_mappings.ini
+sync_scope=allowlist
+allowlist_path=/mnt/us/extensions/kindlestorygraph/allowlist.ini
 ```
 
 ## 4. Daemon starten
@@ -71,7 +74,34 @@ Der Daemon loggt nach `extensions/kindlestorygraph/kindlestorygraph.log` auf
 dem Kindle. Nach einem Sync dort (und auf deinem StoryGraph-Regal) prüfen, ob
 Bücher zugeordnet und Fortschritte übertragen wurden.
 
-## 6. Manuelle Zuordnung für nicht identifizierbare Bücher
+## 6. Auswählen, welche Bücher syncen (Allowlist)
+
+Standardmäßig (`sync_scope=allowlist`) werden nur die Bücher synchronisiert,
+die du explizit auswählst — nichts landet auf StoryGraph, solange du nicht
+zustimmst. Genau so hältst du private oder „spicy" Titel von deinem Regal fern.
+
+Auswahl im KUAL-Menü:
+
+1. KUAL Next → KindleStoryGraph → **Sync selection** öffnen.
+2. Jedes Buch mit Lesefortschritt wird gelistet; antippen zum Umschalten (ein
+   Häkchen bedeutet: wird synchronisiert). Das Menü aktualisiert sich nach
+   jedem Tipp.
+3. Falls ein frisch angefangenes Buch noch fehlt, zuerst **Refresh book list**
+   antippen.
+
+Die Auswahl liegt in `extensions/kindlestorygraph/allowlist.ini` (ein
+`cde_key` pro Zeile); du kannst die Datei stattdessen auch per USB bearbeiten.
+
+Um stattdessen alle Bücher zu synchronisieren, in `config.ini` setzen:
+
+```ini
+sync_scope=all
+```
+
+Dann werden alle Bücher mit Fortschritt synchronisiert und die Auswahl wird
+ignoriert.
+
+## 7. Manuelle Zuordnung für nicht identifizierbare Bücher
 
 Bücher, deren Titel sich nicht automatisch zuordnen lässt, erscheinen im Log
 als `no_match` und werden übersprungen. Manuell zuordnen:
@@ -98,8 +128,9 @@ automatische Zuordnung.
   ist geplant).
 - Fortschritt wird vom Kindle zu StoryGraph übertragen (bei Konflikten gewinnt
   der Kindle).
-- Der erste Sync überträgt den *aktuellen* Gerätefortschritt aller Bücher ab
-  `min_progress` (Standard 2 %) — nur kurz geöffnete Bücher (der Kindle springt
-  auf ~1 %) werden ignoriert. Das Titel-Matching ist gegen StoryGraph
-  verifiziert, aber `no_match`-Bücher werden übersprungen (siehe Log) und
-  können [manuell zugeordnet werden](#6-manuelle-zuordnung-für-nicht-identifizierbare-bücher).
+- Der erste Sync überträgt den *aktuellen* Gerätefortschritt aller erlaubten
+  Bücher ab `min_progress` (Standard 2 %) — nur kurz geöffnete Bücher (der
+  Kindle springt auf ~1 %) werden ignoriert. Das Titel-Matching ist gegen
+  StoryGraph verifiziert, aber `no_match`-Bücher werden übersprungen (siehe
+  Log) und können
+  [manuell zugeordnet werden](#7-manuelle-zuordnung-für-nicht-identifizierbare-bücher).

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use crate::config::{CONFIG, load_manual_mappings};
+use crate::config::{CONFIG, load_allowlist, load_manual_mappings};
 use crate::reader::Reader;
 use crate::state::State;
 use crate::sync::{self, RealStoryGraph, SyncConfig};
@@ -28,6 +28,17 @@ pub fn sync_once_from_paths(
 ) -> Result<Vec<sync::Outcome>> {
     let reader = Reader::open_read_only(cc_db.to_str().context("non-UTF-8 path")?)?;
     let snapshot = reader.snapshot(CONFIG.finish_threshold, CONFIG.min_progress)?;
+    // Allowlist gate (default): only explicitly allowed books are synced.
+    // With `sync_scope=all` every book is synced.
+    let snapshot: Vec<_> = if CONFIG.sync_all() {
+        snapshot
+    } else {
+        let allowlist = load_allowlist(Path::new(&CONFIG.allowlist_path));
+        snapshot
+            .into_iter()
+            .filter(|b| allowlist.contains(&b.cde_key))
+            .collect()
+    };
     let mut state = State::load(state_path)?;
     let sg = RealStoryGraph;
     let cfg = SyncConfig {

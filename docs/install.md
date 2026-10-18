@@ -30,7 +30,8 @@ Treat these as passwords — they grant full access to your account.
 2. Copy the `kindlestorygraph` extension folder to
    `/mnt/us/extensions/kindlestorygraph` (i.e. `extensions/kindlestorygraph/`
    on the USB-mounted drive). The folder contains `config.xml`, `menu.json`,
-   `config_example.ini` and `bin/` (the binary + launcher scripts).
+   `config_example.ini`, `allowlist.example.ini`, `manual_mappings.example.ini`
+   and `bin/` (the binary + launcher scripts).
 3. Safely eject the Kindle.
 
 ## 3. Configure
@@ -55,6 +56,8 @@ poll_interval=900
 match_threshold=0.6
 min_progress=2.0
 manual_mappings_path=/mnt/us/extensions/kindlestorygraph/manual_mappings.ini
+sync_scope=allowlist
+allowlist_path=/mnt/us/extensions/kindlestorygraph/allowlist.ini
 ```
 
 ## 4. Start the daemon
@@ -71,7 +74,32 @@ The daemon logs to `extensions/kindlestorygraph/kindlestorygraph.log` on the
 Kindle. After a sync, check that file (and your StoryGraph shelf) to confirm
 books were matched and progress was pushed.
 
-## 6. Manual mapping for unmatched books
+## 6. Choose which books sync (allowlist)
+
+By default (`sync_scope=allowlist`) only the books you explicitly select are
+synced — nothing lands on StoryGraph unless you opt in. This is the intended
+way to keep private or "spicy" titles off your shelf.
+
+Select books in the KUAL menu:
+
+1. Open KUAL Next → KindleStoryGraph → **Sync selection**.
+2. Every book with reading progress is listed; tap one to toggle it (a
+   checkmark means it will sync). The menu refreshes after each tap.
+3. If a book you just started reading isn't listed yet, tap **Refresh book
+   list** first.
+
+The selection is stored in `extensions/kindlestorygraph/allowlist.ini` (one
+`cde_key` per line); you can edit that file over USB instead if you prefer.
+
+To sync every book instead, set in `config.ini`:
+
+```ini
+sync_scope=all
+```
+
+Then all books with progress are synced and the selection is ignored.
+
+## 7. Manual mapping for unmatched books
 
 Books whose title can't be matched automatically show up in the log as
 `no_match` and are skipped. To map one by hand:
@@ -95,8 +123,8 @@ match.
 - The daemon is started manually via KUAL. It does **not** auto-start after a
   reboot yet; start it again from KUAL (upstart/Hotfix autostart is planned).
 - Progress is pushed from the Kindle to StoryGraph (Kindle wins on conflict).
-- First sync pushes the *current* on-device progress for every book at or above
-  `min_progress` (default 2 %) — books you've only opened (Kindle jumps to
-  ~1 %) are ignored. Title-matching is verified against StoryGraph, but
-  `no_match` books are skipped (see the log) and can be
-  [mapped manually](#6-manual-mapping-for-unmatched-books).
+- First sync pushes the *current* on-device progress for every allowed book at
+  or above `min_progress` (default 2 %) — books you've only opened (Kindle
+  jumps to ~1 %) are ignored. Title-matching is verified against StoryGraph,
+  but `no_match` books are skipped (see the log) and can be
+  [mapped manually](#7-manual-mapping-for-unmatched-books).

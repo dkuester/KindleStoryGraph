@@ -132,6 +132,9 @@ with the greatest `p_lastAccess`.
 
 Sync rules (idempotent, throttled):
 
+- Allowlist gate (default `sync_scope=allowlist`): a book is only synced if its
+  `cde_key` is in `allowlist.ini`. With `sync_scope=all` the gate is bypassed
+  and every book syncs.
 - StoryGraph id resolution: a manual mapping (`manual_mappings.ini`) wins, then
   the persisted state, then an automatic title search.
 - First observation of a book → create/attach the StoryGraph entry, set
@@ -180,7 +183,8 @@ FW ≥ 5.16.3). Toolchain `arm-linux-gnueabihf-` (vs Kobo's
 
 - KUAL extension entry, installable via MRPI/KPM.
 - `config.ini`: email (or session cookie), `finish_threshold`, `progress_step`,
-  `poll_interval`, `language`.
+  `poll_interval`, `match_threshold`, `min_progress`, `sync_scope`,
+  `allowlist_path`, `manual_mappings_path`.
 - Log to a file under `/mnt/us/extensions/kindlestorygraph/` (and `logread`).
 
 ## 9. Implementation phases

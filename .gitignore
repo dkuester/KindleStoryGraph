@@ -10,6 +10,8 @@ packaging/extension/config_example.ini
 *.log
 state.json
 config.ini
+manual_mappings.ini
+allowlist.ini
 
 # macOS
 .DS_Store

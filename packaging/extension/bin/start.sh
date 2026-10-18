@@ -10,6 +10,9 @@ if [ ! -f "$KINDLE_STORYGRAPH_CONFIG" ] && [ -f "$EXT/config_example.ini" ]; the
     cp "$EXT/config_example.ini" "$KINDLE_STORYGRAPH_CONFIG"
 fi
 
+# Refresh the KUAL menu (book list + allowlist selection).
+"$EXT/bin/refresh-menu.sh" 2>/dev/null
+
 # Stop any already-running instance, then start a fresh one.
 pkill -f "$EXT/bin/kindlestorygraph" 2>/dev/null
 

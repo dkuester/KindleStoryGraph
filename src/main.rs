@@ -1,8 +1,8 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use argh::FromArgs;
 
-use kindlestorygraph::config::CONFIG;
+use kindlestorygraph::config::{self, CONFIG};
 use kindlestorygraph::daemon;
 use kindlestorygraph::error::UserError;
 use kindlestorygraph::reader::{self, Reader};
@@ -27,6 +27,9 @@ enum Command {
     UserBook(UserBook),
     Status(Status),
     Progress(Progress),
+    Books(Books),
+    Toggle(Toggle),
+    Menu(Menu),
 }
 
 /// read the Kindle content catalog (cc.db) and print the reading snapshot.
@@ -130,6 +133,33 @@ struct Progress {
     percent: u32,
 }
 
+/// list in-progress books and whether each is allowlisted for sync.
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "books")]
+struct Books {
+    /// path to cc.db (default: config cc_db_path)
+    #[argh(option)]
+    cc_db: Option<String>,
+}
+
+/// toggle whether a book (by cde_key) is synced (allowlist).
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "toggle")]
+struct Toggle {
+    /// the Kindle content key (cde_key) of the book
+    #[argh(positional)]
+    cde_key: String,
+}
+
+/// print the KUAL menu.json (with a per-book allowlist selection).
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "menu")]
+struct Menu {
+    /// path to cc.db (default: config cc_db_path)
+    #[argh(option)]
+    cc_db: Option<String>,
+}
+
 fn main() {
     let args: Args = argh::from_env();
     if let Err(e) = run(args.command) {
@@ -199,8 +229,77 @@ fn run(cmd: Command) -> anyhow::Result<()> {
                 p.percent,
             )?);
         }
+        Command::Books(b) => {
+            let cc_db = PathBuf::from(b.cc_db.unwrap_or_else(|| CONFIG.cc_db_path.clone()));
+            let reader = Reader::open_read_only(cc_db.to_str().unwrap_or_default())?;
+            let snapshot = reader.snapshot(CONFIG.finish_threshold, CONFIG.min_progress)?;
+            let allowlist = config::load_allowlist(Path::new(&CONFIG.allowlist_path));
+            println!("ALLOWED\tCDE_KEY\tPERCENT\tTITLE");
+            for bk in &snapshot {
+                println!(
+                    "{}\t{}\t{:.2}\t{}",
+                    if allowlist.contains(&bk.cde_key) {
+                        "yes"
+                    } else {
+                        "no"
+                    },
+                    bk.cde_key,
+                    bk.percent,
+                    bk.title
+                );
+            }
+        }
+        Command::Toggle(t) => {
+            let allowed = config::toggle_allowlist(Path::new(&CONFIG.allowlist_path), &t.cde_key)?;
+            println!("{}", if allowed { "allowed" } else { "skipped" });
+        }
+        Command::Menu(m) => {
+            let cc_db = PathBuf::from(m.cc_db.unwrap_or_else(|| CONFIG.cc_db_path.clone()));
+            print_json(&build_menu(&cc_db));
+        }
     }
     Ok(())
+}
+
+/// Build the KUAL `menu.json`: a per-book allowlist selection plus the standard
+/// sync/daemon actions. A missing or unreadable `cc.db` yields an empty
+/// selection (the menu stays usable).
+fn build_menu(cc_db: &Path) -> serde_json::Value {
+    let allowlist = config::load_allowlist(Path::new(&CONFIG.allowlist_path));
+    let snapshot = Reader::open_read_only(cc_db.to_str().unwrap_or_default())
+        .ok()
+        .and_then(|reader| {
+            reader
+                .snapshot(CONFIG.finish_threshold, CONFIG.min_progress)
+                .ok()
+        })
+        .unwrap_or_default();
+    let mut selection: Vec<serde_json::Value> = Vec::new();
+    for bk in &snapshot {
+        selection.push(serde_json::json!({
+            "name": bk.title,
+            "checked": allowlist.contains(&bk.cde_key),
+            "action": "bin/toggle-book.sh",
+            "params": bk.cde_key,
+            "refresh": true,
+        }));
+    }
+    if selection.is_empty() {
+        selection.push(serde_json::json!({
+            "name": "(no books with progress yet)",
+            "action": "bin/refresh-menu.sh",
+            "refresh": true,
+        }));
+    }
+    serde_json::json!({
+        "items": [
+            { "name": "Sync selection", "priority": 1, "items": selection },
+            { "name": "Refresh book list", "priority": 2, "action": "bin/refresh-menu.sh", "refresh": true },
+            { "name": "Sync now", "priority": 3, "action": "bin/sync-once.sh" },
+            { "name": "Start sync daemon", "priority": 4, "action": "bin/start.sh" },
+            { "name": "Stop sync daemon", "priority": 5, "action": "bin/stop.sh" }
+        ]
+    })
 }
 
 fn print_json<T: serde::Serialize>(v: &T) {

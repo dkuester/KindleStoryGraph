@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -19,6 +19,8 @@ pub struct Config {
     pub match_threshold: f32,
     pub min_progress: f64,
     pub manual_mappings_path: String,
+    pub sync_scope: String,
+    pub allowlist_path: String,
 }
 
 impl Default for Config {
@@ -37,7 +39,17 @@ impl Default for Config {
             min_progress: 2.0,
             manual_mappings_path: "/mnt/us/extensions/kindlestorygraph/manual_mappings.ini"
                 .to_owned(),
+            sync_scope: "allowlist".to_owned(),
+            allowlist_path: "/mnt/us/extensions/kindlestorygraph/allowlist.ini".to_owned(),
         }
+    }
+}
+
+impl Config {
+    /// Whether the sync covers every book (`sync_scope=all`) rather than only
+    /// the allowlisted books.
+    pub fn sync_all(&self) -> bool {
+        self.sync_scope.eq_ignore_ascii_case("all")
     }
 }
 
@@ -72,6 +84,8 @@ pub fn parse_ini(content: &str) -> Config {
             "match_threshold" => cfg.match_threshold = value.parse().unwrap_or(cfg.match_threshold),
             "min_progress" => cfg.min_progress = value.parse().unwrap_or(cfg.min_progress),
             "manual_mappings_path" => cfg.manual_mappings_path = value.to_owned(),
+            "sync_scope" => cfg.sync_scope = value.to_owned(),
+            "allowlist_path" => cfg.allowlist_path = value.to_owned(),
             _ => {}
         }
     }
@@ -104,6 +118,58 @@ pub fn load_manual_mappings(path: &Path) -> HashMap<String, String> {
         Ok(content) => parse_manual_mappings(&content),
         Err(_) => HashMap::new(),
     }
+}
+
+/// Parses a bare `cde_key` allowlist (one key per line; an optional `=…`
+/// suffix is tolerated, so `key=1` also works). Comments and blank lines are
+/// skipped.
+pub fn parse_allowlist(content: &str) -> HashSet<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let key = line.split('=').next()?.trim();
+            if key.is_empty() || key.starts_with('#') || key.starts_with(';') {
+                None
+            } else {
+                Some(key.to_owned())
+            }
+        })
+        .collect()
+}
+
+/// Loads `allowlist.ini`; a missing file yields an empty set.
+pub fn load_allowlist(path: &Path) -> HashSet<String> {
+    match fs::read_to_string(path) {
+        Ok(content) => parse_allowlist(&content),
+        Err(_) => HashSet::new(),
+    }
+}
+
+/// Toggles `key` in the allowlist file, preserving other lines (including
+/// comments). Returns the new state: `true` if the book is now allowed.
+pub fn toggle_allowlist(path: &Path, key: &str) -> Result<bool> {
+    let content = fs::read_to_string(path).unwrap_or_default();
+    let key = key.trim();
+    let mut present = false;
+    let mut kept: Vec<&str> = Vec::new();
+    for line in content.lines() {
+        let bare = line.split('=').next().unwrap_or(line).trim();
+        if bare == key {
+            present = true;
+        } else {
+            kept.push(line);
+        }
+    }
+    let mut out = kept.join("\n");
+    if !present {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(key);
+    }
+    out.push('\n');
+    fs::write(path, &out).with_context(|| format!("writing allowlist at {}", path.display()))?;
+    Ok(!present)
 }
 
 /// Resolves the config path: the `KINDLE_STORYGRAPH_CONFIG` env var if set
@@ -178,6 +244,37 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert_eq!(m["KEY1"], "id-1");
         assert_eq!(m["KEY2"], "id-2");
+    }
+
+    #[test]
+    fn parses_sync_scope_defaulting_to_allowlist() {
+        assert!(!parse_ini("").sync_all());
+        assert!(!parse_ini("sync_scope=allowlist\n").sync_all());
+        assert!(parse_ini("sync_scope=all\n").sync_all());
+        assert!(parse_ini("sync_scope=ALL\n").sync_all());
+    }
+
+    #[test]
+    fn parses_allowlist_ignoring_comments_and_suffixes() {
+        let a = parse_allowlist("# c\n; c\n\nB0123\nB0456=1\n\n");
+        assert_eq!(a.len(), 2);
+        assert!(a.contains("B0123"));
+        assert!(a.contains("B0456"));
+    }
+
+    #[test]
+    fn toggle_allowlist_adds_then_removes() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("ksg_test_allowlist.ini");
+        fs::write(&path, "# keep\nB0123\n").unwrap();
+
+        assert!(!toggle_allowlist(&path, "B0123").unwrap()); // removed
+        assert_eq!(load_allowlist(&path).len(), 0);
+
+        assert!(toggle_allowlist(&path, "B0123").unwrap()); // re-added
+        assert!(load_allowlist(&path).contains("B0123"));
+
+        fs::remove_file(&path).ok();
     }
 
     #[test]
