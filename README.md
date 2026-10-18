@@ -7,10 +7,10 @@ Synchronizes your reading progress and reading status (currently reading /
 finished) from a jailbroken Kindle to
 [The StoryGraph](https://thestorygraph.com), without switching reader apps.
 
-> **Status:** Phases 1–4 done. The `cc.db` reader, StoryGraph web-API client,
-> sync engine, daemon, KUAL packaging, cross-compile tooling and install/jailbreak
-> docs are all in place; title-matching is live-verified against StoryGraph.
-> Remaining: the on-device live sync test. See
+> **Status:** Phases 1–4 complete. Reader, StoryGraph client, sync engine, KUAL
+> packaging and cross-compile tooling are done and the sync is verified on-device.
+> Also includes opt-in allowlist sync, a minimum-progress threshold, manual
+> title→book mapping, and a manual-only mode. See
 > [docs/architecture.md](docs/architecture.md).
 
 *[Deutsche Übersetzung](README.de.md)*
@@ -18,13 +18,30 @@ finished) from a jailbroken Kindle to
 ## How it works
 
 Unlike Kobo, the Kindle reader cannot be hooked in-process. KindleStoryGraph
-runs as a small daemon that reads the Kindle content catalog (`cc.db`),
-extracts the current book and its percentage, and pushes it to StoryGraph over
-the same HTTP layer NickelStoryGraph uses.
+reads the Kindle content catalog (`cc.db`), extracts reading progress, and
+pushes it to StoryGraph over the same HTTP layer NickelStoryGraph uses.
+
+Run it two ways:
+
+- **Manual** — "Sync now" in the KUAL menu runs a single pass and exits; nothing
+  runs in the background.
+- **Daemon** — "Start sync daemon" polls `cc.db` every 15 minutes and pushes
+  changes automatically.
 
 - Native reader only — no KOReader required.
 - Read-only: never touches `cc.db` or your books.
 - Sparse polling, Wi-Fi gated, suspend-aware.
+
+## Features
+
+- **Opt-in allowlist** (default): choose which books sync from the KUAL menu;
+  `sync_scope=all` in `config.ini` syncs every book instead.
+- **Minimum-progress threshold**: books below 2 % (the Kindle's first-open jump)
+  are ignored until you really start reading.
+- **Manual mapping**: pin `cde_key → StoryGraph id` for titles the search can't
+  match.
+- **Diff-based sync**: only progress *changes* are pushed, throttled per book —
+  never a full-library re-upload.
 
 ## Requirements
 

@@ -8,10 +8,10 @@ Synchronisiert Lesefortschritt und Lesestatus (wird gelesen / gelesen) von
 einem gejailbreakten Kindle zu [The StoryGraph](https://thestorygraph.com),
 ohne die Reader-App zu wechseln.
 
-> **Status:** Phase 1–4 abgeschlossen. `cc.db`-Reader, StoryGraph-Web-API-Client,
-> Sync-Engine, Daemon, KUAL-Paketierung, Cross-Compile-Tooling und
-> Install-/Jailbreak-Doku stehen; das Titel-Matching ist live gegen StoryGraph
-> verifiziert. Offen: der Live-Sync-Test auf dem Gerät. Siehe
+> **Status:** Phase 1–4 abgeschlossen. Reader, StoryGraph-Client, Sync-Engine,
+> KUAL-Paketierung und Cross-Compile-Tooling sind fertig und der Sync ist auf dem
+> Gerät verifiziert. Dazu: Opt-in-Allowlist-Sync, Mindestfortschritts-Schwelle,
+> manuelle Titel-Zuordnung und ein rein manueller Modus. Siehe
 > [docs/architecture.md](docs/architecture.md).
 
 *[English version](README.md)*
@@ -19,13 +19,31 @@ ohne die Reader-App zu wechseln.
 ## Funktionsweise
 
 Anders als beim Kobo lässt sich der Kindle-Reader nicht prozessintern hooken.
-KindleStoryGraph läuft als kleiner Daemon, der den Kindle-Inhaltskatalog
-(`cc.db`) liest, das aktuelle Buch samt Prozentstand ermittelt und diesen über
-dieselbe HTTP-Schicht zu StoryGraph überträgt, die NickelStoryGraph nutzt.
+KindleStoryGraph liest den Kindle-Inhaltskatalog (`cc.db`), ermittelt den
+Lesefortschritt und überträgt ihn über dieselbe HTTP-Schicht zu StoryGraph, die
+NickelStoryGraph nutzt.
+
+Zwei Betriebsarten:
+
+- **Manuell** — „Sync now" im KUAL-Menü führt einen einzelnen Durchlauf aus und
+  beendet sich; im Hintergrund läuft nichts.
+- **Daemon** — „Start sync daemon" pollt `cc.db` alle 15 Minuten und überträgt
+  Änderungen automatisch.
 
 - Nur der native Reader — kein KOReader nötig.
 - Read-only: fasst weder `cc.db` noch die Bücher an.
 - Sparsames Polling, Wi-Fi-abhängig, suspend-bewusst.
+
+## Funktionen
+
+- **Opt-in-Allowlist** (Standard): Im KUAL-Menü wählst du, welche Bücher syncen;
+  `sync_scope=all` in `config.ini` synchronisiert stattdessen alle Bücher.
+- **Mindestfortschritts-Schwelle**: Bücher unter 2 % (der Sprung beim ersten
+  Öffnen) werden ignoriert, bis du wirklich liest.
+- **Manuelle Zuordnung**: `cde_key → StoryGraph-ID` für Titel, die die Suche
+  nicht zuordnen kann.
+- **Diff-basierter Sync**: Nur Fortschritts-*Änderungen* werden übertragen,
+  pro Buch gedrosselt — nie ein Voll-Upload der Bibliothek.
 
 ## Voraussetzungen
 
