@@ -64,12 +64,16 @@ struct RawRow {
 
 /// Deduplicate by `cde_key` (greatest `last_access` wins) and map to progress
 /// entries. `rows` must be sorted by `last_access` descending, so the first
-/// occurrence of each key is the winner.
-fn deduplicate(rows: Vec<RawRow>, finish_threshold: f64) -> Vec<BookProgress> {
+/// occurrence of each key is the winner. Books below `min_progress` are
+/// dropped (progress must reach the unlock threshold before syncing).
+fn deduplicate(rows: Vec<RawRow>, finish_threshold: f64, min_progress: f64) -> Vec<BookProgress> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     for r in rows {
         if !seen.insert(r.cde_key.clone()) {
+            continue;
+        }
+        if r.percent < min_progress {
             continue;
         }
         let Some(status) = derive_status(r.percent, finish_threshold) else {
@@ -106,8 +110,9 @@ impl Reader {
     /// Snapshot of local books with progress, most recent first.
     ///
     /// Filters `p_isArchived = 0` (the cloud-only duplicate rows carry no
-    /// progress) and `p_percentFinished > 0`.
-    pub fn snapshot(&self, finish_threshold: f64) -> Result<Vec<BookProgress>> {
+    /// progress), `p_percentFinished > 0`, and books below `min_progress`
+    /// (a book must reach the unlock threshold before it is synced).
+    pub fn snapshot(&self, finish_threshold: f64, min_progress: f64) -> Result<Vec<BookProgress>> {
         let mut stmt = self.conn.prepare(
             "SELECT p_cdeKey, p_cdeType, p_titles_0_nominal, j_credits,
                     p_percentFinished, p_lastAccess
@@ -131,13 +136,21 @@ impl Reader {
         })?;
 
         let mut raw: Vec<RawRow> = rows.collect::<Result<_, _>>()?;
-        Ok(deduplicate(std::mem::take(&mut raw), finish_threshold))
+        Ok(deduplicate(
+            std::mem::take(&mut raw),
+            finish_threshold,
+            min_progress,
+        ))
     }
 
     /// The currently-read book: the in-progress book accessed most recently.
-    pub fn current_book(&self, finish_threshold: f64) -> Result<Option<BookProgress>> {
+    pub fn current_book(
+        &self,
+        finish_threshold: f64,
+        min_progress: f64,
+    ) -> Result<Option<BookProgress>> {
         Ok(self
-            .snapshot(finish_threshold)?
+            .snapshot(finish_threshold, min_progress)?
             .into_iter()
             .find(|b| b.status == Status::CurrentlyReading))
     }
@@ -229,7 +242,7 @@ mod tests {
                 last_access: 100,
             },
         ];
-        let out = deduplicate(rows, 99.5);
+        let out = deduplicate(rows, 99.5, 0.0);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].percent, 70.0);
         assert_eq!(out[0].last_access, 200);
@@ -244,7 +257,7 @@ mod tests {
         insert(&r, "c", 0, "LOCAL2", "Finished", Some(100.0), 150);
         insert(&r, "d", 0, "LOCAL3", "Unread", Some(0.0), 50);
 
-        let snap = r.snapshot(99.5).unwrap();
+        let snap = r.snapshot(99.5, 0.0).unwrap();
         assert_eq!(snap.len(), 2);
         assert_eq!(snap[0].cde_key, "LOCAL1");
         assert_eq!(snap[0].status, Status::CurrentlyReading);
@@ -252,8 +265,20 @@ mod tests {
         assert_eq!(snap[1].cde_key, "LOCAL2");
         assert_eq!(snap[1].status, Status::Read);
 
-        let cur = r.current_book(99.5).unwrap().unwrap();
+        let cur = r.current_book(99.5, 0.0).unwrap().unwrap();
         assert_eq!(cur.cde_key, "LOCAL1");
         assert_eq!(cur.author, "Andy Mangels, Michael A. Martin");
+    }
+
+    #[test]
+    fn snapshot_respects_min_progress() {
+        let r = test_reader();
+        insert(&r, "a", 0, "LOW", "Barely started", Some(1.0), 200);
+        insert(&r, "b", 0, "OK", "Actually reading", Some(5.0), 150);
+
+        let snap = r.snapshot(99.5, 2.0).unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].cde_key, "OK");
+        assert_eq!(snap[0].percent, 5.0);
     }
 }

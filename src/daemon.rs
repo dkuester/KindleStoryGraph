@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use crate::config::CONFIG;
+use crate::config::{CONFIG, load_manual_mappings};
 use crate::reader::Reader;
 use crate::state::State;
 use crate::sync::{self, RealStoryGraph, SyncConfig};
@@ -27,14 +27,15 @@ pub fn sync_once_from_paths(
     dry_run: bool,
 ) -> Result<Vec<sync::Outcome>> {
     let reader = Reader::open_read_only(cc_db.to_str().context("non-UTF-8 path")?)?;
-    let snapshot = reader.snapshot(CONFIG.finish_threshold)?;
+    let snapshot = reader.snapshot(CONFIG.finish_threshold, CONFIG.min_progress)?;
     let mut state = State::load(state_path)?;
     let sg = RealStoryGraph;
     let cfg = SyncConfig {
         progress_step: CONFIG.progress_step,
         match_threshold: CONFIG.match_threshold,
     };
-    let outcomes = sync::sync_once(&snapshot, &mut state, cfg, &sg, dry_run)?;
+    let mappings = load_manual_mappings(Path::new(&CONFIG.manual_mappings_path));
+    let outcomes = sync::sync_once(&snapshot, &mut state, cfg, &sg, &mappings, dry_run)?;
     if !dry_run {
         state.save(state_path)?;
     }

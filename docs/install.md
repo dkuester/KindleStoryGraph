@@ -53,6 +53,8 @@ finish_threshold=99.5
 progress_step=1.0
 poll_interval=900
 match_threshold=0.6
+min_progress=2.0
+manual_mappings_path=/mnt/us/extensions/kindlestorygraph/manual_mappings.ini
 ```
 
 ## 4. Start the daemon
@@ -69,11 +71,32 @@ The daemon logs to `extensions/kindlestorygraph/kindlestorygraph.log` on the
 Kindle. After a sync, check that file (and your StoryGraph shelf) to confirm
 books were matched and progress was pushed.
 
+## 6. Manual mapping for unmatched books
+
+Books whose title can't be matched automatically show up in the log as
+`no_match` and are skipped. To map one by hand:
+
+1. Note its `cde_key` from the log (`NoMatch { cde_key: "..." }`), or find it
+   with `kindlestorygraph snapshot <cc.db>`.
+2. Open the book on https://app.thestorygraph.com and copy the UUID from the
+   URL (`app.thestorygraph.com/books/<UUID>`), or run `search "<title>"`.
+3. Add a line to `extensions/kindlestorygraph/manual_mappings.ini` (copy from
+   `manual_mappings.example.ini`):
+
+   ```
+   <cde_key>=<storygraph_book_id>
+   ```
+
+The mapping takes effect on the next sync cycle and overrides any automatic
+match.
+
 ## Notes & limitations
 
 - The daemon is started manually via KUAL. It does **not** auto-start after a
   reboot yet; start it again from KUAL (upstart/Hotfix autostart is planned).
 - Progress is pushed from the Kindle to StoryGraph (Kindle wins on conflict).
-- First sync pushes the *current* on-device progress for every book with
-  `percent > 0`; the title-matching is verified against StoryGraph, but
-  `no_match` books are skipped (see the log) and can be mapped manually later.
+- First sync pushes the *current* on-device progress for every book at or above
+  `min_progress` (default 2 %) — books you've only opened (Kindle jumps to
+  ~1 %) are ignored. Title-matching is verified against StoryGraph, but
+  `no_match` books are skipped (see the log) and can be
+  [mapped manually](#6-manual-mapping-for-unmatched-books).

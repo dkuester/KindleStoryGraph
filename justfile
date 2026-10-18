@@ -15,6 +15,7 @@ package:
     mkdir -p "{{EXT}}/bin"
     cp "target-armv7/{{TARGET}}/release/kindlestorygraph" "{{EXT}}/bin/kindlestorygraph"
     cp config_example.ini "{{EXT}}/config_example.ini"
+    cp manual_mappings.example.ini "{{EXT}}/manual_mappings.example.ini"
     chmod +x "{{EXT}}/bin/kindlestorygraph"
     echo "Extension assembled in {{EXT}}/ — copy it to /mnt/us/extensions/kindlestorygraph"
 

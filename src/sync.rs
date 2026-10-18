@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -42,6 +43,11 @@ impl StoryGraphClient for RealStoryGraph {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Outcome {
     Attached {
+        cde_key: String,
+        storygraph_id: String,
+        percent: u32,
+    },
+    Mapped {
         cde_key: String,
         storygraph_id: String,
         percent: u32,
@@ -108,6 +114,10 @@ fn match_book<SG: StoryGraphClient>(
 /// Runs one sync pass: computes the diff between the cc.db snapshot and the
 /// persisted state, pushes changes to StoryGraph, and mutates `state` in place.
 ///
+/// `manual_mappings` pins `cde_key → storygraph_id` and overrides both the
+/// persisted state and the automatic title search (used for books that can't be
+/// matched automatically).
+///
 /// With `dry_run` set, matching/search still runs but nothing is written to
 /// StoryGraph and `state` is left untouched — the outcomes show what *would*
 /// happen.
@@ -116,80 +126,109 @@ pub fn sync_once<SG: StoryGraphClient>(
     state: &mut State,
     config: SyncConfig,
     sg: &SG,
+    manual_mappings: &HashMap<String, String>,
     dry_run: bool,
 ) -> Result<Vec<Outcome>> {
     let mut outcomes = Vec::new();
 
     for book in snapshot {
-        match state.books.get(&book.cde_key).cloned() {
-            None => {
-                // First observation → attach to StoryGraph.
-                let Some(storygraph_id) = match_book(sg, book, config.match_threshold)? else {
-                    outcomes.push(Outcome::NoMatch {
-                        cde_key: book.cde_key.clone(),
-                    });
-                    continue;
-                };
-                if !dry_run {
-                    sg.set_status(&storygraph_id, status_id(book.status))?;
-                    if book.status == Status::CurrentlyReading {
-                        sg.set_progress(&storygraph_id, percent_int(book.percent))?;
-                    }
-                    state.books.insert(
-                        book.cde_key.clone(),
-                        BookState {
-                            storygraph_id: storygraph_id.clone(),
-                            status: status_slug(book.status).to_owned(),
-                            last_percent: book.percent,
-                            last_synced_at: now_epoch(),
-                        },
-                    );
+        // Resolve the StoryGraph id: manual mapping wins, then the persisted
+        // state, then an automatic title search.
+        let mapped = manual_mappings.get(&book.cde_key).cloned();
+        let in_state = state.books.get(&book.cde_key).cloned();
+
+        let resolved: Option<String> = match (&mapped, &in_state) {
+            (Some(id), _) => Some(id.clone()),
+            (None, Some(bs)) => Some(bs.storygraph_id.clone()),
+            (None, None) => match_book(sg, book, config.match_threshold)?,
+        };
+
+        let Some(storygraph_id) = resolved else {
+            outcomes.push(Outcome::NoMatch {
+                cde_key: book.cde_key.clone(),
+            });
+            continue;
+        };
+
+        // Already attached to exactly this id → normal diff handling below.
+        let already_attached = in_state
+            .as_ref()
+            .is_some_and(|bs| bs.storygraph_id == storygraph_id);
+
+        if !already_attached {
+            // First observation, or (re)mapped to a different id → attach.
+            if !dry_run {
+                sg.set_status(&storygraph_id, status_id(book.status))?;
+                if book.status == Status::CurrentlyReading {
+                    sg.set_progress(&storygraph_id, percent_int(book.percent))?;
                 }
-                outcomes.push(Outcome::Attached {
+                state.books.insert(
+                    book.cde_key.clone(),
+                    BookState {
+                        storygraph_id: storygraph_id.clone(),
+                        status: status_slug(book.status).to_owned(),
+                        last_percent: book.percent,
+                        last_synced_at: now_epoch(),
+                    },
+                );
+            }
+            let outcome = if mapped.is_some() {
+                Outcome::Mapped {
                     cde_key: book.cde_key.clone(),
                     storygraph_id,
                     percent: percent_int(book.percent),
+                }
+            } else {
+                Outcome::Attached {
+                    cde_key: book.cde_key.clone(),
+                    storygraph_id,
+                    percent: percent_int(book.percent),
+                }
+            };
+            outcomes.push(outcome);
+            continue;
+        }
+
+        // Already attached to this id → diff against the persisted progress.
+        let bs = in_state.expect("already_attached implies a state entry");
+        match book.status {
+            Status::Read if bs.status != "read" => {
+                if !dry_run {
+                    sg.set_status(&bs.storygraph_id, ReadingStatus::Read as u8)?;
+                    sg.set_progress(&bs.storygraph_id, percent_int(book.percent))?;
+                    if let Some(b) = state.books.get_mut(&book.cde_key) {
+                        b.status = "read".to_owned();
+                        b.last_percent = book.percent;
+                        b.last_synced_at = now_epoch();
+                    }
+                }
+                outcomes.push(Outcome::Finished {
+                    cde_key: book.cde_key.clone(),
                 });
             }
-            Some(bs) => match book.status {
-                Status::Read if bs.status != "read" => {
+            Status::CurrentlyReading => {
+                if (book.percent - bs.last_percent).abs() >= config.progress_step {
+                    let pct = percent_int(book.percent);
                     if !dry_run {
-                        sg.set_status(&bs.storygraph_id, ReadingStatus::Read as u8)?;
-                        sg.set_progress(&bs.storygraph_id, percent_int(book.percent))?;
+                        sg.set_progress(&bs.storygraph_id, pct)?;
                         if let Some(b) = state.books.get_mut(&book.cde_key) {
-                            b.status = "read".to_owned();
                             b.last_percent = book.percent;
                             b.last_synced_at = now_epoch();
                         }
                     }
-                    outcomes.push(Outcome::Finished {
+                    outcomes.push(Outcome::ProgressUpdated {
+                        cde_key: book.cde_key.clone(),
+                        percent: pct,
+                    });
+                } else {
+                    outcomes.push(Outcome::Unchanged {
                         cde_key: book.cde_key.clone(),
                     });
                 }
-                Status::CurrentlyReading => {
-                    if (book.percent - bs.last_percent).abs() >= config.progress_step {
-                        let pct = percent_int(book.percent);
-                        if !dry_run {
-                            sg.set_progress(&bs.storygraph_id, pct)?;
-                            if let Some(b) = state.books.get_mut(&book.cde_key) {
-                                b.last_percent = book.percent;
-                                b.last_synced_at = now_epoch();
-                            }
-                        }
-                        outcomes.push(Outcome::ProgressUpdated {
-                            cde_key: book.cde_key.clone(),
-                            percent: pct,
-                        });
-                    } else {
-                        outcomes.push(Outcome::Unchanged {
-                            cde_key: book.cde_key.clone(),
-                        });
-                    }
-                }
-                Status::Read => outcomes.push(Outcome::Unchanged {
-                    cde_key: book.cde_key.clone(),
-                }),
-            },
+            }
+            Status::Read => outcomes.push(Outcome::Unchanged {
+                cde_key: book.cde_key.clone(),
+            }),
         }
     }
 
@@ -288,7 +327,8 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
+        let outcomes =
+            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
 
         assert_eq!(
             outcomes,
@@ -324,7 +364,8 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
+        let outcomes =
+            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
 
         assert_eq!(
             outcomes,
@@ -355,7 +396,8 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
+        let outcomes =
+            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
 
         assert_eq!(
             outcomes,
@@ -383,7 +425,8 @@ mod tests {
         let mock = mock_with("The Great Gatsby", "sg-1");
         let snapshot = vec![book("asin1", "The Great Gatsby", 99.9, Status::Read)];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
+        let outcomes =
+            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
 
         assert_eq!(
             outcomes,
@@ -410,7 +453,8 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
+        let outcomes =
+            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
 
         assert_eq!(
             outcomes,
@@ -432,7 +476,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, true).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), true).unwrap();
 
         assert_eq!(
             outcomes,
@@ -445,6 +489,42 @@ mod tests {
         assert!(mock.status_calls.borrow().is_empty());
         assert!(mock.progress_calls.borrow().is_empty());
         assert!(state.books.is_empty());
+    }
+
+    #[test]
+    fn manual_mapping_is_used_without_search() {
+        let mut state = State::default();
+        // No search results at all — the book can only be resolved manually.
+        let mock = mock_with("", "");
+        let snapshot = vec![book(
+            "asin1",
+            "Some Unidentifiable Title",
+            12.0,
+            Status::CurrentlyReading,
+        )];
+
+        let mut mappings = HashMap::new();
+        mappings.insert("asin1".to_owned(), "sg-manual".to_owned());
+
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &mappings, false).unwrap();
+
+        assert_eq!(
+            outcomes,
+            vec![Outcome::Mapped {
+                cde_key: "asin1".to_owned(),
+                storygraph_id: "sg-manual".to_owned(),
+                percent: 12,
+            }]
+        );
+        assert_eq!(
+            *mock.status_calls.borrow(),
+            vec![("sg-manual".to_owned(), 2)]
+        );
+        assert_eq!(
+            *mock.progress_calls.borrow(),
+            vec![("sg-manual".to_owned(), 12)]
+        );
+        assert_eq!(state.books["asin1"].storygraph_id, "sg-manual");
     }
 
     #[test]
@@ -481,7 +561,8 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
+        let outcomes =
+            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
 
         assert_eq!(
             outcomes,

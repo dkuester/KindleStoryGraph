@@ -82,6 +82,9 @@ WHERE p_type = 'Entry:Item'
 - `p_lastAccess` is epoch seconds.
 - `p_percentFinished` is a **float** (e.g. `99.6`); round only for display,
   never for threshold logic.
+- `min_progress` (default `2.0`): a book is only considered once its percent
+  reaches this threshold, so books the Kindle marks ~1 % on first open are
+  ignored (applied in Rust, after the SQL above).
 
 Deduplication: the catalog can hold more than one row per book (e.g. cloud vs
 local). Key books by `p_cdeKey` where unique; when duplicate rows share a
@@ -118,17 +121,19 @@ Local state (persisted JSON, e.g.
 
 Status derivation from **percent** (NOT from `p_readState`):
 
-| percent                              | StoryGraph status  |
-|--------------------------------------|--------------------|
-| `>= finish_threshold` (default 99.5) | read (finished)    |
-| `0 < pct < finish_threshold`         | currently-reading  |
-| `0` or `NULL`                        | ignored / to-read  |
+| percent                                | StoryGraph status  |
+|----------------------------------------|--------------------|
+| `>= finish_threshold` (default 99.5)   | read (finished)    |
+| `min_progress <= pct < finish_threshold` | currently-reading|
+| `< min_progress`, `0` or `NULL`        | ignored (not synced) |
 
-"Currently reading" = the in-progress book (`0 < pct < threshold`) with the
-greatest `p_lastAccess`.
+"Currently reading" = the in-progress book (`min_progress <= pct < threshold`)
+with the greatest `p_lastAccess`.
 
 Sync rules (idempotent, throttled):
 
+- StoryGraph id resolution: a manual mapping (`manual_mappings.ini`) wins, then
+  the persisted state, then an automatic title search.
 - First observation of a book → create/attach the StoryGraph entry, set
   currently-reading.
 - Percent delta `>= progress_step` (default `1.0` percentage point) since last

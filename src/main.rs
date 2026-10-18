@@ -40,6 +40,10 @@ struct Snapshot {
     /// percent at or above which a book counts as finished (default 99.5)
     #[argh(option)]
     threshold: Option<f64>,
+
+    /// minimum percent to include; books below are not shown (default 0)
+    #[argh(option)]
+    min_progress: Option<f64>,
 }
 
 /// run one sync pass: read cc.db, diff against state, push changes to StoryGraph.
@@ -138,8 +142,9 @@ fn run(cmd: Command) -> anyhow::Result<()> {
     match cmd {
         Command::Snapshot(s) => {
             let threshold = s.threshold.unwrap_or(reader::DEFAULT_FINISH_THRESHOLD);
+            let min_progress = s.min_progress.unwrap_or(0.0);
             let r = Reader::open_read_only(&s.path)?;
-            let snapshot = r.snapshot(threshold)?;
+            let snapshot = r.snapshot(threshold, min_progress)?;
             let current = snapshot
                 .iter()
                 .find(|b| b.status == reader::Status::CurrentlyReading);

@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
@@ -16,6 +17,8 @@ pub struct Config {
     pub progress_step: f64,
     pub poll_interval: u64,
     pub match_threshold: f32,
+    pub min_progress: f64,
+    pub manual_mappings_path: String,
 }
 
 impl Default for Config {
@@ -31,6 +34,9 @@ impl Default for Config {
             progress_step: 1.0,
             poll_interval: 900,
             match_threshold: 0.6,
+            min_progress: 2.0,
+            manual_mappings_path: "/mnt/us/extensions/kindlestorygraph/manual_mappings.ini"
+                .to_owned(),
         }
     }
 }
@@ -64,10 +70,40 @@ pub fn parse_ini(content: &str) -> Config {
             "progress_step" => cfg.progress_step = value.parse().unwrap_or(cfg.progress_step),
             "poll_interval" => cfg.poll_interval = value.parse().unwrap_or(cfg.poll_interval),
             "match_threshold" => cfg.match_threshold = value.parse().unwrap_or(cfg.match_threshold),
+            "min_progress" => cfg.min_progress = value.parse().unwrap_or(cfg.min_progress),
+            "manual_mappings_path" => cfg.manual_mappings_path = value.to_owned(),
             _ => {}
         }
     }
     cfg
+}
+
+/// Parses `cde_key = storygraph_id` lines into a map. Ignores comments,
+/// blank lines, and malformed lines.
+pub fn parse_manual_mappings(content: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            let key = key.trim();
+            let value = value.trim();
+            if !key.is_empty() && !value.is_empty() {
+                map.insert(key.to_owned(), value.to_owned());
+            }
+        }
+    }
+    map
+}
+
+/// Loads `manual_mappings.ini`; a missing file yields an empty map.
+pub fn load_manual_mappings(path: &Path) -> HashMap<String, String> {
+    match fs::read_to_string(path) {
+        Ok(content) => parse_manual_mappings(&content),
+        Err(_) => HashMap::new(),
+    }
 }
 
 /// Resolves the config path: the `KINDLE_STORYGRAPH_CONFIG` env var if set
@@ -119,12 +155,29 @@ mod tests {
     #[test]
     fn parses_numeric_fields() {
         let c = parse_ini(
-            "finish_threshold=99.5\nprogress_step=2.0\npoll_interval=600\nmatch_threshold=0.8\n",
+            "finish_threshold=99.5\nprogress_step=2.0\npoll_interval=600\nmatch_threshold=0.8\nmin_progress=2.0\n",
         );
         assert_eq!(c.finish_threshold, 99.5);
         assert_eq!(c.progress_step, 2.0);
         assert_eq!(c.poll_interval, 600);
         assert_eq!(c.match_threshold, 0.8);
+        assert_eq!(c.min_progress, 2.0);
+    }
+
+    #[test]
+    fn parses_manual_mappings_path() {
+        let c = parse_ini("manual_mappings_path=/tmp/mappings.ini\n");
+        assert_eq!(c.manual_mappings_path, "/tmp/mappings.ini");
+    }
+
+    #[test]
+    fn parses_manual_mappings_skipping_junk() {
+        let m = parse_manual_mappings(
+            "# comment\n; also comment\n\nKEY1 = id-1\nKEY2=id-2\njunkline\nKEY3=\n",
+        );
+        assert_eq!(m.len(), 2);
+        assert_eq!(m["KEY1"], "id-1");
+        assert_eq!(m["KEY2"], "id-2");
     }
 
     #[test]
