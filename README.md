@@ -66,8 +66,8 @@ This project builds on prior reverse engineering and community work:
   `p_readState`, …) and the modern read-state storage that this project reads.
 - [kaikozlov/kindle.koplugin](https://github.com/kaikozlov/kindle.koplugin) —
   precedent for reading the Kindle content catalog from on-device code.
-- [KindleModding](https://kindlemodding.org/) — Véra jailbreak, Hotfix, KUAL,
-  MRPI and KPM, the infrastructure this project depends on.
+- [KindleModding](https://kindlemodding.org/) — Véra jailbreak, Hotfix, KUAL
+  Next, MRPI and KPM, the infrastructure this project depends on.
 - The [KindleModding wiki](https://kindlemodding.org/kindle-hacking/) and the
   [MobileRead forums](https://www.mobileread.com/forums/) — Kindle internals
   documentation.

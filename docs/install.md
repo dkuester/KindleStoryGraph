@@ -7,7 +7,7 @@
 1. A **jailbroken** Kindle (see [jailbreak.md](jailbreak.md)). Reading progress
    lives in `/var/local/cc.db`, which is only accessible with root — a jailbreak
    is a hard requirement, not optional.
-2. **KUAL** (Kindle Unified Application Launcher) installed.
+2. **KUAL Next** (or KUALA) installed — see [jailbreak.md](jailbreak.md).
 3. Wi-Fi connectivity on the Kindle for the sync.
 
 ## 1. Get your StoryGraph session cookies
@@ -57,7 +57,7 @@ match_threshold=0.6
 
 ## 4. Start the daemon
 
-KUAL → KindleStoryGraph → **Start sync daemon**.
+KUAL Next → KindleStoryGraph → **Start sync daemon**.
 
 This launches the daemon in the background; it polls `cc.db` every 15 minutes
 and pushes changes to StoryGraph whenever Wi-Fi is up. "Sync now" runs a single

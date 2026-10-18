@@ -23,19 +23,24 @@ KS2). It is confirmed working on the Kindle Basic 2024 (KT6) with firmware
 If your exact firmware version is not listed in the guide, the standard advice
 is to try the next-closest version listed.
 
-## KUAL
+## Launcher: KUAL Next
 
-KUAL (Kindle Unified Application Launcher) provides the on-device menu that
-launches KindleStoryGraph.
+Classic KUAL (the Java "booklet") stopped working on firmware ~5.19.3+, because
+Amazon removed the Java API it relied on. On modern firmware (5.19.4+,
+including 5.20.1) use **KUAL Next**, a native launcher that reads the same
+`config.xml` + `menu.json` extension format — KindleStoryGraph's extension works
+unchanged.
 
-- Thread: https://www.mobileread.com/forums/showthread.php?t=203326
-- On firmware 5.x, use the `KUAL-KDK-2.0.azw2` build.
+- KUAL Next: https://github.com/thiagokokada/kual-next (MobileRead thread:
+  https://www.mobileread.com/forums/showthread.php?t=374955)
+- Alternative (C++/GTK): KUALA — https://github.com/kasparcode/kuala
 
-Install KUAL before installing KindleStoryGraph.
+Install KUAL Next (or KUALA) before installing KindleStoryGraph.
 
 ## Credits
 
 - Véra jailbreak: the KindleModding community (kindlemodding.org, MobileRead).
-- KUAL: NiLuJe and contributors.
+- KUAL (legacy) by Twobob/Ixtab/Stepk/NiLuJe; KUAL Next by k0kada
+  (thiagokokada); KUALA by kasparcode.
 - Kindle content-catalog (`cc.db`) schema: reverse-engineered and documented by
   [zevisvei/kindle-reading-dashboard](https://github.com/zevisvei/kindle-reading-dashboard).

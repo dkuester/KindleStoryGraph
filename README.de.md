@@ -68,8 +68,8 @@ Community-Arbeit auf:
   Lesestatus-Ablage reverse-engineered und dokumentiert, die dieses Projekt liest.
 - [kaikozlov/kindle.koplugin](https://github.com/kaikozlov/kindle.koplugin) —
   Präzedenzfall für das Lesen des Kindle-Inhaltskatalogs aus On-Device-Code.
-- [KindleModding](https://kindlemodding.org/) — Véra-Jailbreak, Hotfix, KUAL,
-  MRPI und KPM, die Infrastruktur, auf der dieses Projekt aufsetzt.
+- [KindleModding](https://kindlemodding.org/) — Véra-Jailbreak, Hotfix, KUAL
+  Next, MRPI und KPM, die Infrastruktur, auf der dieses Projekt aufsetzt.
 - Das [KindleModding-Wiki](https://kindlemodding.org/kindle-hacking/) und die
   [MobileRead-Foren](https://www.mobileread.com/forums/) — Dokumentation der
   Kindle-Interna.
