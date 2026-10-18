@@ -484,14 +484,18 @@ pub fn search(query: &str) -> Result<Vec<Book>> {
     Ok(results)
 }
 
-/// Returns what fraction of the meaningful words in `query_title` appear in
-/// `result_title`.
+/// Scores how well `result_title` matches `query_title` as the F1 of word
+/// recall and precision over unique, stopword-filtered tokens.
+///
+/// F1 (rather than pure recall) penalises result titles that are a superset of
+/// the query — e.g. an "… 8-Book Collection Set" matching a query for a single
+/// volume — so the exact book outranks box sets and omnibuses.
 pub fn title_match_score(query_title: &str, result_title: &str) -> f32 {
     const STOPS: &[&str] = &[
         "the", "a", "an", "of", "in", "by", "to", "and", "or", "for", "at", "its", "is",
     ];
 
-    let tokenize = |s: &str| -> Vec<String> {
+    let tokenize = |s: &str| -> std::collections::HashSet<String> {
         s.to_lowercase()
             // Split on non-alphanumeric so volume/edition numbers ("Vol. 1" vs "Vol. 2")
             // survive as their own tokens instead of vanishing as delimiter characters.
@@ -509,14 +513,36 @@ pub fn title_match_score(query_title: &str, result_title: &str) -> f32 {
     if query_words.is_empty() {
         return 0.0;
     }
+    let result_words = tokenize(result_title);
+    if result_words.is_empty() {
+        return 0.0;
+    }
 
-    let result_words: std::collections::HashSet<String> =
-        tokenize(result_title).into_iter().collect();
-    let matches = query_words
-        .iter()
-        .filter(|w| result_words.contains(*w))
-        .count();
-    matches as f32 / query_words.len() as f32
+    let matches = query_words.intersection(&result_words).count();
+    let recall = matches as f32 / query_words.len() as f32;
+    let precision = matches as f32 / result_words.len() as f32;
+    2.0 * recall * precision / (recall + precision)
+}
+
+/// Returns the "main" part of a Kindle title for matching against StoryGraph's
+/// cleaner titles.
+///
+/// A parenthetical suffix (e.g. " (German Edition)") is stripped, and a colon
+/// subtitle is cut only when it is a long marketing blurb (more than 4 words).
+/// Short subtitles are meaningful (edition/series names) and are kept.
+pub fn clean_title(title: &str) -> &str {
+    let base = match title.find('(') {
+        Some(i) => &title[..i],
+        None => title,
+    };
+
+    if let Some(i) = base.find(':')
+        && base[i + 1..].split_whitespace().count() > 4
+    {
+        return base[..i].trim_end().trim_end_matches('-').trim_end();
+    }
+
+    base.trim_end().trim_end_matches('-').trim_end()
 }
 
 /// Fetches the current user's reading status and progress for a book.
@@ -725,6 +751,41 @@ mod tests {
         // "Vol. 1" vs "Vol. 2" must not score as identical (3/4 words match).
         let s = title_match_score("Harry Potter Vol. 1", "Harry Potter Vol. 2");
         assert!((s - 0.75).abs() < f32::EPSILON, "got {s}");
+    }
+
+    #[test]
+    fn title_match_score_prefers_exact_over_superset() {
+        let query = "Dungeon Crawler Carl: Dungeon Crawler Carl Book 1";
+        let single = title_match_score(query, "Dungeon Crawler Carl");
+        let boxset = title_match_score(
+            query,
+            "Dungeon Crawler Carl Series 8-Book Collection Set (Book 1-8)",
+        );
+        assert!(
+            single > boxset,
+            "single {single} should beat boxset {boxset}"
+        );
+    }
+
+    #[test]
+    fn clean_title_strips_parenthetical_and_long_blurb() {
+        // Long marketing subtitle is cut…
+        assert_eq!(
+            clean_title("Heat 2: Der neue Thriller des preisgekrönten Regisseurs (German Edition)"),
+            "Heat 2"
+        );
+        // …but a short edition subtitle is kept, and the parenthetical stripped.
+        assert_eq!(
+            clean_title("Star Trek - Titan 1: Eine neue Ära (German Edition)"),
+            "Star Trek - Titan 1: Eine neue Ära"
+        );
+        // No subtitle markers → unchanged.
+        assert_eq!(clean_title("The Great Gatsby"), "The Great Gatsby");
+        // A repeating "Book 1" subtitle is cut, leaving the bare title.
+        assert_eq!(
+            clean_title("Dungeon Crawler Carl: Dungeon Crawler Carl Book 1"),
+            "Dungeon Crawler Carl"
+        );
     }
 
     #[test]

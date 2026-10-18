@@ -93,10 +93,11 @@ fn match_book<SG: StoryGraphClient>(
     book: &BookProgress,
     threshold: f32,
 ) -> Result<Option<String>> {
-    let results = sg.search(&book.title)?;
+    let query = storygraph::clean_title(&book.title);
+    let results = sg.search(query)?;
     let mut best: Option<(String, f32)> = None;
     for r in &results {
-        let score = storygraph::title_match_score(&book.title, &r.title);
+        let score = storygraph::title_match_score(query, &r.title);
         if best.as_ref().is_none_or(|(_, s)| score > *s) {
             best = Some((r.id.clone(), score));
         }
@@ -444,5 +445,51 @@ mod tests {
         assert!(mock.status_calls.borrow().is_empty());
         assert!(mock.progress_calls.borrow().is_empty());
         assert!(state.books.is_empty());
+    }
+
+    #[test]
+    fn prefers_single_book_over_box_set() {
+        let mut state = State::default();
+        let mut results = HashMap::new();
+        results.insert(
+            "Dungeon Crawler Carl".to_owned(),
+            vec![
+                Book {
+                    id: "boxset".to_owned(),
+                    title: "Dungeon Crawler Carl Series 8-Book Collection Set (Book 1-8)"
+                        .to_owned(),
+                    author: "Matt Dinniman".to_owned(),
+                    pages: 0,
+                },
+                Book {
+                    id: "single".to_owned(),
+                    title: "Dungeon Crawler Carl".to_owned(),
+                    author: "Matt Dinniman".to_owned(),
+                    pages: 0,
+                },
+            ],
+        );
+        let mock = Mock {
+            results,
+            status_calls: RefCell::new(vec![]),
+            progress_calls: RefCell::new(vec![]),
+        };
+        let snapshot = vec![book(
+            "asin-dcc",
+            "Dungeon Crawler Carl: Dungeon Crawler Carl Book 1",
+            23.0,
+            Status::CurrentlyReading,
+        )];
+
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
+
+        assert_eq!(
+            outcomes,
+            vec![Outcome::Attached {
+                cde_key: "asin-dcc".to_owned(),
+                storygraph_id: "single".to_owned(),
+                percent: 23,
+            }]
+        );
     }
 }
