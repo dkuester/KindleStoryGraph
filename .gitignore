@@ -1,5 +1,9 @@
 # Rust
 /target
+/target-armv7
+
+# Built extension binary (produced by `just build && just package`)
+packaging/extension/bin/kindlestorygraph
 
 # local runtime artifacts (device state, secrets, logs)
 *.log

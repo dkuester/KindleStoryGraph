@@ -1,8 +1,9 @@
 # KindleStoryGraph — Architecture
 
-Status: **Phases 1–3 implemented** (reader, StoryGraph client, sync engine +
-daemon loop). Phase 4 (on-device packaging) and live StoryGraph testing remain.
-This document is the implementable plan; it is refined as each phase lands.
+Status: **Phases 1–4 implemented** (reader, StoryGraph client, sync engine +
+daemon loop, KUAL packaging + cross-compile tooling + install/jailbreak docs).
+Only the on-device live sync test remains. This document is the implementable
+plan; it is refined as each phase lands.
 
 ## 1. Goal
 
@@ -185,8 +186,8 @@ FW ≥ 5.16.3). Toolchain `arm-linux-gnueabihf-` (vs Kobo's
 - **Phase 2** ✅: StoryGraph client — port NickelStoryGraph's Rust CLI to armhf;
   test login + matching + updates against StoryGraph.
 - **Phase 3** ✅: daemon + state machine; host unit tests for the state machine.
-- **Phase 4** (next): packaging (KUAL/MRPI/KPM) + install guide + jailbreak
-  prerequisite doc + i18n (EN/DE).
+- **Phase 4** ✅: packaging (KUAL/MRPI/KPM) + install guide + jailbreak
+  prerequisite doc + i18n (EN/DE). Live sync test still pending on-device.
 
 ## 10. Risks & open questions
 

@@ -8,11 +8,11 @@ Synchronisiert Lesefortschritt und Lesestatus (wird gelesen / gelesen) von
 einem gejailbreakten Kindle zu [The StoryGraph](https://thestorygraph.com),
 ohne die Reader-App zu wechseln.
 
-> **Status:** frühe Entwicklung — Phase 1–3 abgeschlossen. Der `cc.db`-Reader,
-> der StoryGraph-Web-API-Client (Login, Suche, Status, Fortschritt) sowie die
-> Sync-Engine (Zustandsmaschine, Diff, Matching) und der Daemon-Loop sind
-> implementiert und unit-getestet. Offen: On-Device-Paketierung (KUAL/MRPI) und
-> Live-Test gegen StoryGraph. Siehe [docs/architecture.md](docs/architecture.md).
+> **Status:** Phase 1–4 abgeschlossen. `cc.db`-Reader, StoryGraph-Web-API-Client,
+> Sync-Engine, Daemon, KUAL-Paketierung, Cross-Compile-Tooling und
+> Install-/Jailbreak-Doku stehen; das Titel-Matching ist live gegen StoryGraph
+> verifiziert. Offen: der Live-Sync-Test auf dem Gerät. Siehe
+> [docs/architecture.md](docs/architecture.md).
 
 *[English version](README.md)*
 
@@ -32,10 +32,27 @@ dieselbe HTTP-Schicht zu StoryGraph überträgt, die NickelStoryGraph nutzt.
 - Ein gejailbreakter Kindle (z. B. [Véra](https://kindlemodding.org/jailbreaking/Vera/)).
 - Firmware ca. 5.17+ (entwickelt und getestet auf 5.20.1, Kindle Basic 2024).
 
+## Installation
+
+Die vollständige Anleitung steht in [docs/install.de.md](docs/install.de.md);
+die Jailbreak-Voraussetzung in [docs/jailbreak.de.md](docs/jailbreak.de.md).
+
+## Bauen
+
+Das statische armhf-(musl-)Binary cross-kompilieren und die KUAL-Erweiterung
+zusammenbauen (Docker nötig):
+
+    just build && just package
+
+Die Erweiterung entsteht in `packaging/extension/`; den Ordner nach
+`/mnt/us/extensions/kindlestorygraph` auf dem Kindle kopieren. Getaggte
+`v*`-Releases bauen per CI ein Zip (`.forgejo/workflows/release.yml`).
+
 ## Projektstatus
 
-Phase 0. Der vollständige Plan samt Umsetzungsphasen steht in
-[docs/architecture.md](docs/architecture.md).
+Phase 4 — Paketierung, Cross-Compile-Tooling und Doku sind fertig; offen ist
+der Live-Sync-Test auf dem Gerät. Der vollständige Plan samt Umsetzungsphasen
+steht in [docs/architecture.md](docs/architecture.md).
 
 ## Danksagung / Credits
 

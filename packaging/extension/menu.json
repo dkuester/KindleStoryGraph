@@ -1,0 +1,28 @@
+{
+  "items": [
+    {
+      "name": "KindleStoryGraph",
+      "priority": 0,
+      "items": [
+        {
+          "name": "Start sync daemon",
+          "priority": 1,
+          "action": "bin/start.sh",
+          "exitmenu": true
+        },
+        {
+          "name": "Sync now",
+          "priority": 2,
+          "action": "bin/sync-once.sh",
+          "exitmenu": true
+        },
+        {
+          "name": "Stop sync daemon",
+          "priority": 3,
+          "action": "bin/stop.sh",
+          "exitmenu": true
+        }
+      ]
+    }
+  ]
+}

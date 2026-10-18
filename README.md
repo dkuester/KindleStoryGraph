@@ -7,11 +7,11 @@ Synchronizes your reading progress and reading status (currently reading /
 finished) from a jailbroken Kindle to
 [The StoryGraph](https://thestorygraph.com), without switching reader apps.
 
-> **Status:** early development — Phases 1–3 done. The `cc.db` reader, the
-> StoryGraph web-API client (login, search, status, progress), and the sync
-> engine (state machine, diff, matching) plus the daemon loop are implemented
-> and unit-tested. Remaining: on-device packaging (KUAL/MRPI) and live
-> StoryGraph testing. See [docs/architecture.md](docs/architecture.md).
+> **Status:** Phases 1–4 done. The `cc.db` reader, StoryGraph web-API client,
+> sync engine, daemon, KUAL packaging, cross-compile tooling and install/jailbreak
+> docs are all in place; title-matching is live-verified against StoryGraph.
+> Remaining: the on-device live sync test. See
+> [docs/architecture.md](docs/architecture.md).
 
 *[Deutsche Übersetzung](README.de.md)*
 
@@ -31,10 +31,27 @@ the same HTTP layer NickelStoryGraph uses.
 - A jailbroken Kindle (e.g. [Véra](https://kindlemodding.org/jailbreaking/Vera/)).
 - Firmware ~5.17+ (developed and tested on 5.20.1, Kindle Basic 2024).
 
+## Install
+
+See [docs/install.md](docs/install.md) for the full guide; the jailbreak
+prerequisite is documented in [docs/jailbreak.md](docs/jailbreak.md).
+
+## Building
+
+Cross-compile the static armhf (musl) binary and assemble the KUAL extension
+(Docker required):
+
+    just build && just package
+
+The extension is assembled into `packaging/extension/`; copy that folder to
+`/mnt/us/extensions/kindlestorygraph` on the Kindle. Tagged `v*` releases build
+a zip via CI (`.forgejo/workflows/release.yml`).
+
 ## Project status
 
-Phase 0. See [docs/architecture.md](docs/architecture.md) for the full plan and
-implementation phases.
+Phase 4 — packaging, cross-compile tooling and docs are done; the remaining step
+is the on-device live sync test. See [docs/architecture.md](docs/architecture.md)
+for the full plan and implementation phases.
 
 ## Credits
 

@@ -1,0 +1,34 @@
+name: Release
+
+# Builds a static armhf binary and packages it as a KUAL extension zip,
+# attached to the release when a `v*` tag is pushed.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-armhf:
+    # Needs more time/CPU than codeberg-tiny (cross toolchain + full build).
+    runs-on: codeberg-medium
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+      - name: Build static armhf binary
+        run: cargo zigbuild --release --target armv7-unknown-linux-musleabihf
+      - name: Assemble KUAL extension
+        run: |
+          mkdir -p packaging/extension/bin
+          cp target/armv7-unknown-linux-musleabihf/release/kindlestorygraph packaging/extension/bin/kindlestorygraph
+          cp config_example.ini packaging/extension/config_example.ini
+      - name: Package zip
+        run: |
+          cd packaging/extension
+          zip -r ../../kindlestorygraph-kual.zip .
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kindlestorygraph-kual
+          path: kindlestorygraph-kual.zip
