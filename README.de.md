@@ -68,9 +68,10 @@ Die Erweiterung entsteht in `packaging/extension/`; den Ordner nach
 
 ## Projektstatus
 
-Phase 4 — Paketierung, Cross-Compile-Tooling und Doku sind fertig; offen ist
-der Live-Sync-Test auf dem Gerät. Der vollständige Plan samt Umsetzungsphasen
-steht in [docs/architecture.md](docs/architecture.md).
+Phase 1–4 abgeschlossen, der Sync ist auf dem Gerät verifiziert. Der
+vollständige Plan samt Umsetzungsphasen steht in
+[docs/architecture.md](docs/architecture.md). Künftige Arbeit ist in
+[ROADMAP.md](ROADMAP.md) festgehalten.
 
 ## Danksagung / Credits
 

@@ -66,9 +66,9 @@ a zip via CI (`.forgejo/workflows/release.yml`).
 
 ## Project status
 
-Phase 4 — packaging, cross-compile tooling and docs are done; the remaining step
-is the on-device live sync test. See [docs/architecture.md](docs/architecture.md)
-for the full plan and implementation phases.
+Phases 1–4 complete and the sync is verified on-device. See
+[docs/architecture.md](docs/architecture.md) for the full plan and
+implementation phases. Future work is tracked in [ROADMAP.md](ROADMAP.md).
 
 ## Credits
 
