@@ -40,7 +40,7 @@ macro_rules! debug_log {
 
 // ── Output types (serialized to JSON by the CLI) ─────────────────────────────
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct Book {
     pub id: String,
     pub title: String,

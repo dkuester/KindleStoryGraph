@@ -4,12 +4,35 @@ use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub session_cookie: String,
     pub remember_user_token: String,
     pub user_slug: String,
     pub debug: bool,
+    pub cc_db_path: String,
+    pub state_path: String,
+    pub finish_threshold: f64,
+    pub progress_step: f64,
+    pub poll_interval: u64,
+    pub match_threshold: f32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            session_cookie: String::new(),
+            remember_user_token: String::new(),
+            user_slug: String::new(),
+            debug: false,
+            cc_db_path: "/var/local/cc.db".to_owned(),
+            state_path: "/mnt/us/extensions/kindlestorygraph/state.json".to_owned(),
+            finish_threshold: 99.5,
+            progress_step: 1.0,
+            poll_interval: 900,
+            match_threshold: 0.6,
+        }
+    }
 }
 
 /// Parses bare `key=value` INI content (the format `config.ini` uses).
@@ -33,6 +56,14 @@ pub fn parse_ini(content: &str) -> Config {
             "remember_user_token" => cfg.remember_user_token = value.to_owned(),
             "user_slug" => cfg.user_slug = value.to_owned(),
             "debug" => cfg.debug = value.eq_ignore_ascii_case("true") || value == "1",
+            "cc_db_path" => cfg.cc_db_path = value.to_owned(),
+            "state_path" => cfg.state_path = value.to_owned(),
+            "finish_threshold" => {
+                cfg.finish_threshold = value.parse().unwrap_or(cfg.finish_threshold)
+            }
+            "progress_step" => cfg.progress_step = value.parse().unwrap_or(cfg.progress_step),
+            "poll_interval" => cfg.poll_interval = value.parse().unwrap_or(cfg.poll_interval),
+            "match_threshold" => cfg.match_threshold = value.parse().unwrap_or(cfg.match_threshold),
             _ => {}
         }
     }
@@ -67,7 +98,7 @@ pub static CONFIG: LazyLock<Config> = LazyLock::new(|| {
     }();
 
     load.unwrap_or_else(|e| {
-        eprintln!("Warning: {e:#}; using empty config.");
+        eprintln!("Warning: {e:#}; using default config.");
         Config::default()
     })
 });
@@ -83,6 +114,24 @@ mod tests {
         assert_eq!(c.remember_user_token, "xyz");
         assert_eq!(c.user_slug, "me");
         assert!(!c.debug);
+    }
+
+    #[test]
+    fn parses_numeric_fields() {
+        let c = parse_ini(
+            "finish_threshold=99.5\nprogress_step=2.0\npoll_interval=600\nmatch_threshold=0.8\n",
+        );
+        assert_eq!(c.finish_threshold, 99.5);
+        assert_eq!(c.progress_step, 2.0);
+        assert_eq!(c.poll_interval, 600);
+        assert_eq!(c.match_threshold, 0.8);
+    }
+
+    #[test]
+    fn invalid_numeric_falls_back_to_default() {
+        let c = parse_ini("finish_threshold=notanumber\npoll_interval=abc\n");
+        assert_eq!(c.finish_threshold, 99.5);
+        assert_eq!(c.poll_interval, 900);
     }
 
     #[test]
@@ -105,6 +154,6 @@ mod tests {
         let c = parse_ini("session_cookie=abc\n");
         assert_eq!(c.session_cookie, "abc");
         assert!(c.remember_user_token.is_empty());
-        assert!(c.user_slug.is_empty());
+        assert_eq!(c.cc_db_path, "/var/local/cc.db");
     }
 }

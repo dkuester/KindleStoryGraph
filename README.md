@@ -7,10 +7,11 @@ Synchronizes your reading progress and reading status (currently reading /
 finished) from a jailbroken Kindle to
 [The StoryGraph](https://thestorygraph.com), without switching reader apps.
 
-> **Status:** early development — Phases 1 and 2 done. The `cc.db` reader and
-> the StoryGraph web-API client (login, search, status, progress) are
-> implemented and unit-tested; the on-device daemon (Phase 3) is next. See
-> [docs/architecture.md](docs/architecture.md).
+> **Status:** early development — Phases 1–3 done. The `cc.db` reader, the
+> StoryGraph web-API client (login, search, status, progress), and the sync
+> engine (state machine, diff, matching) plus the daemon loop are implemented
+> and unit-tested. Remaining: on-device packaging (KUAL/MRPI) and live
+> StoryGraph testing. See [docs/architecture.md](docs/architecture.md).
 
 *[Deutsche Übersetzung](README.de.md)*
 

@@ -1,5 +1,9 @@
+use std::path::PathBuf;
+
 use argh::FromArgs;
 
+use kindlestorygraph::config::CONFIG;
+use kindlestorygraph::daemon;
 use kindlestorygraph::error::UserError;
 use kindlestorygraph::reader::{self, Reader};
 use kindlestorygraph::storygraph::{self, parse_status_arg};
@@ -15,6 +19,8 @@ struct Args {
 #[argh(subcommand)]
 enum Command {
     Snapshot(Snapshot),
+    Sync(Sync),
+    Daemon(Daemon),
     Login(Login),
     Search(Search),
     Whoami(Whoami),
@@ -34,6 +40,28 @@ struct Snapshot {
     /// percent at or above which a book counts as finished (default 99.5)
     #[argh(option)]
     threshold: Option<f64>,
+}
+
+/// run one sync pass: read cc.db, diff against state, push changes to StoryGraph.
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "sync")]
+struct Sync {
+    /// path to cc.db (default: config cc_db_path)
+    #[argh(option)]
+    cc_db: Option<String>,
+
+    /// path to the state file (default: config state_path)
+    #[argh(option)]
+    state: Option<String>,
+}
+
+/// run the sync daemon in a loop.
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "daemon")]
+struct Daemon {
+    /// poll interval in seconds (default: config poll_interval)
+    #[argh(option)]
+    interval: Option<u64>,
 }
 
 /// log in to StoryGraph; the password is read from stdin.
@@ -123,6 +151,16 @@ fn run(cmd: Command) -> anyhow::Result<()> {
                     .filter(|b| b.status == reader::Status::Read)
                     .collect::<Vec<_>>(),
             }));
+        }
+        Command::Sync(s) => {
+            let cc_db = PathBuf::from(s.cc_db.unwrap_or_else(|| CONFIG.cc_db_path.clone()));
+            let state = PathBuf::from(s.state.unwrap_or_else(|| CONFIG.state_path.clone()));
+            let outcomes = daemon::sync_once_from_paths(&cc_db, &state)?;
+            print_json(&outcomes);
+        }
+        Command::Daemon(d) => {
+            let interval = d.interval.unwrap_or(CONFIG.poll_interval);
+            daemon::run(interval)?;
         }
         Command::Login(l) => {
             let mut password = String::new();
