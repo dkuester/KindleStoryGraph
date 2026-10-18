@@ -21,7 +21,11 @@ fn network_up() -> bool {
 
 /// One sync pass: read cc.db, diff against the persisted state, push changes to
 /// StoryGraph, and persist the updated state.
-pub fn sync_once_from_paths(cc_db: &Path, state_path: &Path) -> Result<Vec<sync::Outcome>> {
+pub fn sync_once_from_paths(
+    cc_db: &Path,
+    state_path: &Path,
+    dry_run: bool,
+) -> Result<Vec<sync::Outcome>> {
     let reader = Reader::open_read_only(cc_db.to_str().context("non-UTF-8 path")?)?;
     let snapshot = reader.snapshot(CONFIG.finish_threshold)?;
     let mut state = State::load(state_path)?;
@@ -30,8 +34,10 @@ pub fn sync_once_from_paths(cc_db: &Path, state_path: &Path) -> Result<Vec<sync:
         progress_step: CONFIG.progress_step,
         match_threshold: CONFIG.match_threshold,
     };
-    let outcomes = sync::sync_once(&snapshot, &mut state, cfg, &sg)?;
-    state.save(state_path)?;
+    let outcomes = sync::sync_once(&snapshot, &mut state, cfg, &sg, dry_run)?;
+    if !dry_run {
+        state.save(state_path)?;
+    }
     Ok(outcomes)
 }
 
@@ -43,7 +49,7 @@ pub fn run(poll_interval_secs: u64) -> Result<()> {
 
     loop {
         if network_up() {
-            match sync_once_from_paths(cc_db, state_path) {
+            match sync_once_from_paths(cc_db, state_path, false) {
                 Ok(outcomes) => {
                     for o in &outcomes {
                         if !matches!(o, sync::Outcome::Unchanged { .. }) {

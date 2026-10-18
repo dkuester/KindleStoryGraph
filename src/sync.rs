@@ -106,11 +106,16 @@ fn match_book<SG: StoryGraphClient>(
 
 /// Runs one sync pass: computes the diff between the cc.db snapshot and the
 /// persisted state, pushes changes to StoryGraph, and mutates `state` in place.
+///
+/// With `dry_run` set, matching/search still runs but nothing is written to
+/// StoryGraph and `state` is left untouched — the outcomes show what *would*
+/// happen.
 pub fn sync_once<SG: StoryGraphClient>(
     snapshot: &[BookProgress],
     state: &mut State,
     config: SyncConfig,
     sg: &SG,
+    dry_run: bool,
 ) -> Result<Vec<Outcome>> {
     let mut outcomes = Vec::new();
 
@@ -124,19 +129,21 @@ pub fn sync_once<SG: StoryGraphClient>(
                     });
                     continue;
                 };
-                sg.set_status(&storygraph_id, status_id(book.status))?;
-                if book.status == Status::CurrentlyReading {
-                    sg.set_progress(&storygraph_id, percent_int(book.percent))?;
+                if !dry_run {
+                    sg.set_status(&storygraph_id, status_id(book.status))?;
+                    if book.status == Status::CurrentlyReading {
+                        sg.set_progress(&storygraph_id, percent_int(book.percent))?;
+                    }
+                    state.books.insert(
+                        book.cde_key.clone(),
+                        BookState {
+                            storygraph_id: storygraph_id.clone(),
+                            status: status_slug(book.status).to_owned(),
+                            last_percent: book.percent,
+                            last_synced_at: now_epoch(),
+                        },
+                    );
                 }
-                state.books.insert(
-                    book.cde_key.clone(),
-                    BookState {
-                        storygraph_id: storygraph_id.clone(),
-                        status: status_slug(book.status).to_owned(),
-                        last_percent: book.percent,
-                        last_synced_at: now_epoch(),
-                    },
-                );
                 outcomes.push(Outcome::Attached {
                     cde_key: book.cde_key.clone(),
                     storygraph_id,
@@ -145,12 +152,14 @@ pub fn sync_once<SG: StoryGraphClient>(
             }
             Some(bs) => match book.status {
                 Status::Read if bs.status != "read" => {
-                    sg.set_status(&bs.storygraph_id, ReadingStatus::Read as u8)?;
-                    sg.set_progress(&bs.storygraph_id, percent_int(book.percent))?;
-                    if let Some(b) = state.books.get_mut(&book.cde_key) {
-                        b.status = "read".to_owned();
-                        b.last_percent = book.percent;
-                        b.last_synced_at = now_epoch();
+                    if !dry_run {
+                        sg.set_status(&bs.storygraph_id, ReadingStatus::Read as u8)?;
+                        sg.set_progress(&bs.storygraph_id, percent_int(book.percent))?;
+                        if let Some(b) = state.books.get_mut(&book.cde_key) {
+                            b.status = "read".to_owned();
+                            b.last_percent = book.percent;
+                            b.last_synced_at = now_epoch();
+                        }
                     }
                     outcomes.push(Outcome::Finished {
                         cde_key: book.cde_key.clone(),
@@ -159,10 +168,12 @@ pub fn sync_once<SG: StoryGraphClient>(
                 Status::CurrentlyReading => {
                     if (book.percent - bs.last_percent).abs() >= config.progress_step {
                         let pct = percent_int(book.percent);
-                        sg.set_progress(&bs.storygraph_id, pct)?;
-                        if let Some(b) = state.books.get_mut(&book.cde_key) {
-                            b.last_percent = book.percent;
-                            b.last_synced_at = now_epoch();
+                        if !dry_run {
+                            sg.set_progress(&bs.storygraph_id, pct)?;
+                            if let Some(b) = state.books.get_mut(&book.cde_key) {
+                                b.last_percent = book.percent;
+                                b.last_synced_at = now_epoch();
+                            }
                         }
                         outcomes.push(Outcome::ProgressUpdated {
                             cde_key: book.cde_key.clone(),
@@ -276,7 +287,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
 
         assert_eq!(
             outcomes,
@@ -312,7 +323,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
 
         assert_eq!(
             outcomes,
@@ -343,7 +354,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
 
         assert_eq!(
             outcomes,
@@ -371,7 +382,7 @@ mod tests {
         let mock = mock_with("The Great Gatsby", "sg-1");
         let snapshot = vec![book("asin1", "The Great Gatsby", 99.9, Status::Read)];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
 
         assert_eq!(
             outcomes,
@@ -398,7 +409,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, false).unwrap();
 
         assert_eq!(
             outcomes,
@@ -406,6 +417,32 @@ mod tests {
                 cde_key: "asin1".to_owned()
             }]
         );
+        assert!(state.books.is_empty());
+    }
+
+    #[test]
+    fn dry_run_reports_plan_without_mutating() {
+        let mut state = State::default();
+        let mock = mock_with("The Great Gatsby", "sg-1");
+        let snapshot = vec![book(
+            "asin1",
+            "The Great Gatsby",
+            50.0,
+            Status::CurrentlyReading,
+        )];
+
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, true).unwrap();
+
+        assert_eq!(
+            outcomes,
+            vec![Outcome::Attached {
+                cde_key: "asin1".to_owned(),
+                storygraph_id: "sg-1".to_owned(),
+                percent: 50,
+            }]
+        );
+        assert!(mock.status_calls.borrow().is_empty());
+        assert!(mock.progress_calls.borrow().is_empty());
         assert!(state.books.is_empty());
     }
 }

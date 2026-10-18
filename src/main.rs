@@ -53,6 +53,10 @@ struct Sync {
     /// path to the state file (default: config state_path)
     #[argh(option)]
     state: Option<String>,
+
+    /// dry run: match and plan only, write nothing to StoryGraph or state
+    #[argh(switch)]
+    dry_run: bool,
 }
 
 /// run the sync daemon in a loop.
@@ -153,9 +157,12 @@ fn run(cmd: Command) -> anyhow::Result<()> {
             }));
         }
         Command::Sync(s) => {
+            if s.dry_run {
+                eprintln!("DRY RUN — nothing is written to StoryGraph or the state file.");
+            }
             let cc_db = PathBuf::from(s.cc_db.unwrap_or_else(|| CONFIG.cc_db_path.clone()));
             let state = PathBuf::from(s.state.unwrap_or_else(|| CONFIG.state_path.clone()));
-            let outcomes = daemon::sync_once_from_paths(&cc_db, &state)?;
+            let outcomes = daemon::sync_once_from_paths(&cc_db, &state, s.dry_run)?;
             print_json(&outcomes);
         }
         Command::Daemon(d) => {
