@@ -1,0 +1,10 @@
+# Rust
+/target
+
+# local runtime artifacts (device state, secrets, logs)
+*.log
+state.json
+config.ini
+
+# macOS
+.DS_Store
