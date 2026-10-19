@@ -1,11 +1,14 @@
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+
+use crate::error::UserError;
 
 /// Per-book sync state, keyed by Kindle `p_cdeKey`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -112,6 +115,76 @@ impl State {
     }
 }
 
+/// Exclusive advisory lock on the sync state, held for a whole pass
+/// (load → sync → save).
+///
+/// Without it a manual "Sync now" and the daemon both load the state file, both
+/// write it back, and the last writer wins — silently dropping every book the
+/// other pass attached. Atomic writes do not help there; only serialising the
+/// read-modify-write cycle does.
+///
+/// Implemented as a `flock` on `<state_path>.lock`: the kernel releases it when
+/// the process dies, so a crash cannot leave a stale lock behind (the reason
+/// this is not a PID file).
+#[derive(Debug)]
+pub struct StateLock {
+    _file: File,
+}
+
+const LOCK_ATTEMPTS: u32 = 5;
+const LOCK_DELAY: Duration = Duration::from_millis(250);
+
+fn lock_path(state_path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.lock", state_path.display()))
+}
+
+impl StateLock {
+    /// Acquires the lock, retrying for ~1.25 s (5 × 250 ms).
+    ///
+    /// Deliberately non-blocking with a short budget instead of waiting on the
+    /// daemon: KUAL runs "Sync now" as the launcher process itself, so blocking
+    /// for a full daemon cycle (network I/O plus retries) would freeze the
+    /// Kindle with nothing on screen. Failing with a clear message is better.
+    pub fn acquire(state_path: &Path) -> Result<StateLock> {
+        StateLock::acquire_with(state_path, LOCK_ATTEMPTS, LOCK_DELAY)
+    }
+
+    fn acquire_with(state_path: &Path, attempts: u32, delay: Duration) -> Result<StateLock> {
+        let path = lock_path(state_path);
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("opening lock file {}", path.display()))?;
+
+        for attempt in 1..=attempts {
+            // SAFETY: flock only takes the valid fd of `file`; no memory access.
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if rc == 0 {
+                return Ok(StateLock { _file: file });
+            }
+            let err = std::io::Error::last_os_error();
+            let contended = matches!(
+                err.raw_os_error(),
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EINTR
+            );
+            if !contended {
+                return Err(err).with_context(|| format!("locking {}", path.display()));
+            }
+            if attempt < attempts {
+                std::thread::sleep(delay);
+            }
+        }
+
+        bail!(UserError(format!(
+            "Another sync pass is still running (lock {}). Stop the sync daemon or retry in a minute.",
+            path.display()
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +279,26 @@ mod tests {
         let path = dir.join("state.json");
         fs::write(&path, "  \n").unwrap();
         assert!(State::load(&path).unwrap().books.is_empty());
+    }
+
+    #[test]
+    fn state_lock_is_exclusive_and_released_on_drop() {
+        let dir = temp_dir("kindlestorygraph-test-lock");
+        let path = dir.join("state.json");
+
+        let held = StateLock::acquire_with(&path, 2, Duration::from_millis(10)).unwrap();
+
+        let err = StateLock::acquire_with(&path, 2, Duration::from_millis(10))
+            .expect_err("second pass must not get the lock while the first holds it");
+        assert!(
+            format!("{err:#}")
+                .to_lowercase()
+                .contains("another sync pass"),
+            "unexpected error: {err:#}"
+        );
+
+        drop(held);
+        StateLock::acquire_with(&path, 2, Duration::from_millis(10))
+            .expect("lock must be free again after the guard is dropped");
     }
 }

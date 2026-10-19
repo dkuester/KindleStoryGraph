@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 
 use crate::config::{CONFIG, load_allowlist, load_manual_mappings};
 use crate::reader::Reader;
-use crate::state::State;
+use crate::state::{State, StateLock};
 use crate::sync::{self, RealStoryGraph, SyncConfig};
 
 /// Whether the device currently has network. On Kindle this checks `wlan0`;
@@ -26,6 +26,11 @@ pub fn sync_once_from_paths(
     state_path: &Path,
     dry_run: bool,
 ) -> Result<Vec<sync::Outcome>> {
+    // Serialise whole passes: a manual "Sync now" next to the daemon would
+    // otherwise load and save the same state file and drop each other's books.
+    // Held until this function returns (i.e. across load → sync → save).
+    let _lock = StateLock::acquire(state_path)?;
+
     let reader = Reader::open_read_only(cc_db.to_str().context("non-UTF-8 path")?)?;
     let snapshot = reader.snapshot(CONFIG.finish_threshold, CONFIG.min_progress)?;
     // Allowlist gate (default): only explicitly allowed books are synced.

@@ -20,6 +20,10 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
 - `state.json` is written atomically (temp file → fsync → rename), and a
   corrupt file is archived as `state.json.corrupt-<epoch>` and replaced by an
   empty state instead of failing every sync cycle forever.
+- Sync passes are serialised by a `flock` on `state.json.lock`, so "Sync now"
+  next to the daemon can no longer clobber the other pass's state (lost
+  updates); the lock fails after ~1.25 s with a clear message instead of
+  blocking the launcher process.
 
 ## Quick wins
 
@@ -30,10 +34,6 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   only; deeper follow-up: also guard the status (don't demote "read" back to
   "currently-reading"). Effort: small. Mapping: `get_user_book` is already in
   the client (`userbook` command).
-
-- **Concurrent-sync guard (state.json race)**
-  "Sync now" while the daemon runs can race on `state.json`. Write via
-  tmp-file + atomic rename (or a lock file). Effort: small.
 
 - **Filter non-book entries (PDOC/dummy)**
   Exclude `p_cdeType != "EBOK"` entries (e.g. the JAILBROKEN placeholder) from
