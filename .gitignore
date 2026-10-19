@@ -14,6 +14,9 @@ manual_mappings.ini
 allowlist.ini
 search_cache.json
 
+# local handoff notes (private, not part of the project)
+NEXT_SESSION.md
+
 # macOS
 .DS_Store
 .AppleDouble

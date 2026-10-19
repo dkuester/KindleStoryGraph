@@ -36,6 +36,14 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   and an exit button. Touch quirks (swap/mirror axes) and the vertical viewport
   origin are honored. `build.rs` compiles vendored FBInk only for the
   armv7-musl target, so host builds stay fast.
+- FBInk UI follow-ups: a read-only "Einstellungen" screen (min_progress,
+  finish_threshold, language, sync_scope, and the key paths) behind a second
+  button row; scrolling for long book lists (list offset + ^/v tap zones + a
+  page indicator, replacing the "+N more" line); and the "Verknüpfen" flow
+  (pick a book → non-blocking StoryGraph search on a background thread →
+  candidate list → tap writes manual_mappings.ini and regenerates the KUAL
+  menu). The search shows a "Suchen…" status with cancel; timeout, no-network,
+  expired-cookies and no-results are surfaced explicitly.
 
 ## Quick wins
 
@@ -90,9 +98,3 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   Map Kindle abandonment to StoryGraph `did-not-finish`/`paused`. Feasible via
   `update_status` (statuses already supported by the client), but the Kindle
   doesn't signal DNF cleanly, so the mapping is heuristic — deferred.
-
-- **FBInk UI follow-ups** *(optional)*
-  The on-device UI currently shows status + book list with tap-to-toggle. Still
-  to build: the cache-pick "Verknüpfen" flow (StoryGraph search + candidate
-  list instead of an on-screen keyboard), a read-only "Einstellungen" display,
-  and scrolling for book lists longer than one screen.
