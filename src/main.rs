@@ -161,6 +161,10 @@ struct Menu {
     /// path to cc.db (default: config cc_db_path)
     #[argh(option)]
     cc_db: Option<String>,
+
+    /// write the menu to config menu_path instead of printing it
+    #[argh(switch)]
+    write: bool,
 }
 
 /// search StoryGraph for unlinked books and cache candidates for the pick-list.
@@ -281,10 +285,20 @@ fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Toggle(t) => {
             let allowed = config::toggle_allowlist(Path::new(&CONFIG.allowlist_path), &t.cde_key)?;
             println!("{}", if allowed { "allowed" } else { "skipped" });
+            // Regenerate the menu in the same process: KUAL Next re-reads
+            // menu.json ~250 ms after starting the action.
+            if let Err(e) = menu::write_menu(Path::new(&CONFIG.cc_db_path)) {
+                eprintln!("warning: could not update the KUAL menu: {e:#}");
+            }
         }
         Command::Menu(m) => {
             let cc_db = PathBuf::from(m.cc_db.unwrap_or_else(|| CONFIG.cc_db_path.clone()));
-            print_json(&menu::build_menu(&cc_db));
+            if m.write {
+                menu::write_menu(&cc_db)?;
+                println!("menu written to {}", CONFIG.menu_path);
+            } else {
+                print_json(&menu::build_menu(&cc_db));
+            }
         }
         Command::FindMatches(f) => {
             let cc_db = PathBuf::from(f.cc_db.unwrap_or_else(|| CONFIG.cc_db_path.clone()));
@@ -298,6 +312,9 @@ fn run(cmd: Command) -> anyhow::Result<()> {
                 &l.storygraph_id,
             )?;
             println!("Linked {} -> {}", l.cde_key, l.storygraph_id);
+            if let Err(e) = menu::write_menu(Path::new(&CONFIG.cc_db_path)) {
+                eprintln!("warning: could not update the KUAL menu: {e:#}");
+            }
         }
     }
     Ok(())

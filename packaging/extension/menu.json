@@ -7,6 +7,7 @@
         {
           "name": "(no books with progress yet)",
           "action": "bin/refresh-menu.sh",
+          "exitmenu": false,
           "refresh": true
         }
       ]
@@ -14,13 +15,13 @@
     {
       "name": "Find matches for books",
       "priority": 3,
-      "action": "bin/find-matches.sh",
-      "refresh": true
+      "action": "bin/find-matches.sh"
     },
     {
       "name": "Refresh book list",
       "priority": 4,
       "action": "bin/refresh-menu.sh",
+      "exitmenu": false,
       "refresh": true
     },
     {

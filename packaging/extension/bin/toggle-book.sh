@@ -1,9 +1,11 @@
 #!/bin/sh
-# KindleStoryGraph — toggle a book's allowlist membership, then refresh the
-# KUAL menu so the checked state updates.
+# KindleStoryGraph — toggle a book's allowlist membership.
+#
+# One binary call on purpose: the binary also rewrites menu.json, and KUAL Next
+# re-reads it only ~250 ms after starting the action (and only because the menu
+# entry sets "exitmenu": false). A second process in that window would lose the
+# race and leave the old checkmarks on screen.
 EXT="/mnt/us/extensions/kindlestorygraph"
 export KINDLE_STORYGRAPH_CONFIG="$EXT/config.ini"
 
-"$EXT/bin/kindlestorygraph" toggle "$1" || exit 1
-"$EXT/bin/kindlestorygraph" menu > "$EXT/menu.json.tmp" || exit 1
-mv "$EXT/menu.json.tmp" "$EXT/menu.json"
+exec "$EXT/bin/kindlestorygraph" toggle "$1"

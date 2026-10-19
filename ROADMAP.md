@@ -13,6 +13,10 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
 - Manual title→book mapping (`manual_mappings.ini`).
 - Manual-only mode ("Sync now") alongside the 15-minute daemon.
 - First release v0.1.0 with a static armhf artifact.
+- KUAL Next menu fixes: `exitmenu: false` on the per-book actions (tapping a
+  book no longer closes the launcher), selection/link state shown in the entry
+  label instead of KUAL's press-only `checked`, and one binary call per action
+  so `menu.json` is rewritten inside the launcher's ~250 ms refresh window.
 
 ## Quick wins
 

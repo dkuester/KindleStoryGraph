@@ -1,9 +1,11 @@
 #!/bin/sh
-# KindleStoryGraph — search StoryGraph for unlinked books and cache the
-# candidates for the KUAL "Link books" picker, then refresh the menu.
+# KindleStoryGraph — search StoryGraph for unlinked books, cache the candidates
+# for the KUAL "Link books" picker, and regenerate menu.json.
+#
+# This one is slow (one HTTP search per unlinked book), so its menu entry keeps
+# KUAL's default "exitmenu": true: the launcher steps aside while it runs and
+# the regenerated menu is picked up the next time KUAL starts.
 EXT="/mnt/us/extensions/kindlestorygraph"
 export KINDLE_STORYGRAPH_CONFIG="$EXT/config.ini"
 
-"$EXT/bin/kindlestorygraph" find-matches || exit 1
-"$EXT/bin/kindlestorygraph" menu > "$EXT/menu.json.tmp" || exit 1
-mv "$EXT/menu.json.tmp" "$EXT/menu.json"
+exec "$EXT/bin/kindlestorygraph" find-matches

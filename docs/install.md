@@ -59,6 +59,7 @@ manual_mappings_path=/mnt/us/extensions/kindlestorygraph/manual_mappings.ini
 sync_scope=allowlist
 allowlist_path=/mnt/us/extensions/kindlestorygraph/allowlist.ini
 search_cache_path=/mnt/us/extensions/kindlestorygraph/search_cache.json
+menu_path=/mnt/us/extensions/kindlestorygraph/menu.json
 ```
 
 ## 4. Start the daemon
@@ -84,10 +85,16 @@ way to keep private or "spicy" titles off your shelf.
 Select books in the KUAL menu:
 
 1. Open KUAL Next → KindleStoryGraph → **Sync selection**.
-2. Every book with reading progress is listed; tap one to toggle it (a
-   checkmark means it will sync). The menu refreshes after each tap.
+2. Every book with reading progress is listed; tap one to toggle it. A
+   `[sync]` suffix marks the books that will sync — KUAL's own checkmark only
+   appears while a button is pressed, so the state is part of the label. The
+   list is rewritten after each tap, and the menu stays open.
 3. If a book you just started reading isn't listed yet, tap **Refresh book
    list** first.
+
+The menu jumps back to its top level after each tap (KUAL Next reloads the
+whole menu to pick up the new state), so a large library costs one extra tap
+per book.
 
 The selection is stored in `extensions/kindlestorygraph/allowlist.ini` (one
 `cde_key` per line); you can edit that file over USB instead if you prefer.
@@ -110,9 +117,12 @@ different StoryGraph book — in two ways.
 
 1. In KUAL Next → KindleStoryGraph, tap **Find matches for books**. This
    searches StoryGraph (title + author) for every *unlinked* book and caches
-   the top 5 results. It needs Wi-Fi and valid cookies.
+   the top 5 results. It needs Wi-Fi and valid cookies, and it is slow (one
+   search per book), so KUAL closes while it runs — reopen it when the Kindle
+   is back on the home screen and **Link books** will be there.
 2. Open **Link books**. Each unlinked book is listed; tap it to see the
-   matching StoryGraph books (title — author), then tap the correct one.
+   matching StoryGraph books (title — author), then tap the correct one. The
+   menu stays open and the book disappears from **Link books**.
 3. The choice is written to `manual_mappings.ini` and takes effect on the next
    sync; the book then shows a `[linked]` marker in **Sync selection**.
 

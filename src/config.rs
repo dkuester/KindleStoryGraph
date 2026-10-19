@@ -22,6 +22,7 @@ pub struct Config {
     pub sync_scope: String,
     pub allowlist_path: String,
     pub search_cache_path: String,
+    pub menu_path: String,
 }
 
 impl Default for Config {
@@ -43,6 +44,7 @@ impl Default for Config {
             sync_scope: "allowlist".to_owned(),
             allowlist_path: "/mnt/us/extensions/kindlestorygraph/allowlist.ini".to_owned(),
             search_cache_path: "/mnt/us/extensions/kindlestorygraph/search_cache.json".to_owned(),
+            menu_path: "/mnt/us/extensions/kindlestorygraph/menu.json".to_owned(),
         }
     }
 }
@@ -89,6 +91,7 @@ pub fn parse_ini(content: &str) -> Config {
             "sync_scope" => cfg.sync_scope = value.to_owned(),
             "allowlist_path" => cfg.allowlist_path = value.to_owned(),
             "search_cache_path" => cfg.search_cache_path = value.to_owned(),
+            "menu_path" => cfg.menu_path = value.to_owned(),
             _ => {}
         }
     }

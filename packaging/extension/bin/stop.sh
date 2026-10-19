@@ -1,4 +1,4 @@
 #!/bin/sh
-# KindleStoryGraph — stop the sync daemon.
-EXT="/mnt/us/extensions/kindlestorygraph"
-pkill -f "$EXT/bin/kindlestorygraph" 2>/dev/null
+# KindleStoryGraph — stop the sync daemon. Matches the daemon only, so a
+# running toggle/sync pass is left alone.
+pkill -f "kindlestorygraph daemon" 2>/dev/null

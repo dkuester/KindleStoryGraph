@@ -13,7 +13,9 @@ fi
 # Refresh the KUAL menu (book list + allowlist selection).
 "$EXT/bin/refresh-menu.sh" 2>/dev/null
 
-# Stop any already-running instance, then start a fresh one.
-pkill -f "$EXT/bin/kindlestorygraph" 2>/dev/null
+# Stop any already-running instance, then start a fresh one. Match the daemon
+# only — a broad "bin/kindlestorygraph" pattern would also kill a toggle, a
+# sync pass, or (when start.sh is invoked by its full path) this very shell.
+pkill -f "kindlestorygraph daemon" 2>/dev/null
 
 nohup "$EXT/bin/kindlestorygraph" daemon >> "$LOG" 2>&1 &

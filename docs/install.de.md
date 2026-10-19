@@ -59,6 +59,7 @@ manual_mappings_path=/mnt/us/extensions/kindlestorygraph/manual_mappings.ini
 sync_scope=allowlist
 allowlist_path=/mnt/us/extensions/kindlestorygraph/allowlist.ini
 search_cache_path=/mnt/us/extensions/kindlestorygraph/search_cache.json
+menu_path=/mnt/us/extensions/kindlestorygraph/menu.json
 ```
 
 ## 4. Daemon starten
@@ -84,11 +85,17 @@ zustimmst. Genau so hältst du private oder „spicy" Titel von deinem Regal fer
 Auswahl im KUAL-Menü:
 
 1. KUAL Next → KindleStoryGraph → **Sync selection** öffnen.
-2. Jedes Buch mit Lesefortschritt wird gelistet; antippen zum Umschalten (ein
-   Häkchen bedeutet: wird synchronisiert). Das Menü aktualisiert sich nach
-   jedem Tipp.
+2. Jedes Buch mit Lesefortschritt wird gelistet; antippen zum Umschalten. Der
+   Zusatz `[sync]` markiert die Bücher, die synchronisiert werden — KUAls
+   eigenes Häkchen erscheint nur, solange eine Taste gedrückt ist, deshalb
+   steckt der Zustand im Namen. Die Liste wird nach jedem Tipp neu geschrieben,
+   das Menü bleibt dabei offen.
 3. Falls ein frisch angefangenes Buch noch fehlt, zuerst **Refresh book list**
    antippen.
+
+Das Menü springt nach jedem Tipp auf seine oberste Ebene zurück (KUAL Next lädt
+das komplette Menü neu, um den neuen Zustand zu übernehmen) — bei einer großen
+Bibliothek kostet das pro Buch einen zusätzlichen Tipp.
 
 Die Auswahl liegt in `extensions/kindlestorygraph/allowlist.ini` (ein
 `cde_key` pro Zeile); du kannst die Datei stattdessen auch per USB bearbeiten.
@@ -113,10 +120,13 @@ neu mit einem anderen StoryGraph-Buch verknüpfen — auf zwei Arten zuordnen.
 1. In KUAL Next → KindleStoryGraph **Find matches for books** antippen. Das
    sucht StoryGraph (Titel + Autor) für jedes *unverknüpfte* Buch ab und
    speichert die Top-5-Treffer zwischen. Dafür braucht es WLAN und gültige
-   Cookies.
+   Cookies; außerdem dauert es (eine Suche pro Buch), deshalb schließt sich
+   KUAL währenddessen — wenn der Kindle wieder auf dem Startbildschirm ist,
+   KUAL erneut öffnen, dann ist **Link books** da.
 2. **Link books** öffnen. Jedes unverknüpfte Buch ist gelistet; antippen, um
    die passenden StoryGraph-Bücher zu sehen (Titel — Autor), dann das
-   richtige antippen.
+   richtige antippen. Das Menü bleibt offen und das Buch verschwindet aus
+   **Link books**.
 3. Die Auswahl wird in `manual_mappings.ini` geschrieben und greift beim
    nächsten Sync; das Buch bekommt danach in **Sync selection** den Marker
    `[linked]`.
