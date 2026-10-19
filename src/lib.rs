@@ -7,6 +7,11 @@ pub mod daemon;
 pub mod error;
 pub mod menu;
 pub mod reader;
+pub mod setup;
 pub mod state;
 pub mod storygraph;
 pub mod sync;
+pub mod ui;
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+pub mod fbink;

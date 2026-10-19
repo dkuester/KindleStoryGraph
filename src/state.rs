@@ -115,6 +115,25 @@ impl State {
     }
 }
 
+/// Formats an epoch-seconds timestamp as a short relative age ("just now",
+/// "5 min ago", "3 h ago", "2 d ago"). Used for menu/status output.
+pub(crate) fn humanize_ago(epoch_secs: i64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let delta = now.saturating_sub(epoch_secs);
+    if delta < 60 {
+        "just now".to_owned()
+    } else if delta < 3600 {
+        format!("{} min ago", delta / 60)
+    } else if delta < 86400 {
+        format!("{} h ago", delta / 3600)
+    } else {
+        format!("{} d ago", delta / 86400)
+    }
+}
+
 /// Exclusive advisory lock on the sync state, held for a whole pass
 /// (load → sync → save).
 ///

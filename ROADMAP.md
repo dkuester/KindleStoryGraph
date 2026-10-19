@@ -24,6 +24,18 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   next to the daemon can no longer clobber the other pass's state (lost
   updates); the lock fails after ~1.25 s with a clear message instead of
   blocking the launcher process.
+- O0 menu polish: a `Status` group (last-sync age + synced count), count-carrying
+  group headers (`Sync selection (N/M)`, `Link books (K)`), and percent in each
+  book label.
+- O1 host setup: `import-cookies <cookies.txt>` (Netscape export → config.ini,
+  preserving other keys) and `doctor [--cc-db] [--network]`. Full plan in
+  `docs/ui-options.md`.
+- O6 FBInk settings UI (on-device, no browser/X): the `ui` subcommand draws the
+  status block and book list straight to the e-ink framebuffer via a
+  statically-linked FBInk, with tap-to-toggle sync selection, a sync-now action
+  and an exit button. Touch quirks (swap/mirror axes) and the vertical viewport
+  origin are honored. `build.rs` compiles vendored FBInk only for the
+  armv7-musl target, so host builds stay fast.
 
 ## Quick wins
 
@@ -43,9 +55,7 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   Rotate `kindlestorygraph.log` by size so it doesn't grow unbounded.
   Effort: small.
 
-- **`doctor` command** *(optional)*
-  One command that checks `cc.db` is readable, `config.ini` is valid, and the
-  session cookies still work. Effort: small.
+- ~~**`doctor` command**~~ — done (see Recently completed).
 
 ## High priority
 
@@ -74,11 +84,15 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
 
 ## Low priority (optional)
 
-- **Cookie import helper** *(optional)*
-  Extract `session_cookie` + `remember_user_token` from an exported browser
-  cookie file instead of copying values out of DevTools by hand.
+- ~~**Cookie import helper**~~ — done as `import-cookies` (see Recently completed).
 
 - **More statuses ("did not finish"/"paused")** *(optional)*
   Map Kindle abandonment to StoryGraph `did-not-finish`/`paused`. Feasible via
   `update_status` (statuses already supported by the client), but the Kindle
   doesn't signal DNF cleanly, so the mapping is heuristic — deferred.
+
+- **FBInk UI follow-ups** *(optional)*
+  The on-device UI currently shows status + book list with tap-to-toggle. Still
+  to build: the cache-pick "Verknüpfen" flow (StoryGraph search + candidate
+  list instead of an on-screen keyboard), a read-only "Einstellungen" display,
+  and scrolling for book lists longer than one screen.

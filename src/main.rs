@@ -7,6 +7,7 @@ use kindlestorygraph::daemon;
 use kindlestorygraph::error::UserError;
 use kindlestorygraph::menu;
 use kindlestorygraph::reader::{self, Reader};
+use kindlestorygraph::setup;
 use kindlestorygraph::storygraph::{self, parse_status_arg};
 
 /// storygraph sync for the native Kindle reader.
@@ -33,6 +34,9 @@ enum Command {
     Menu(Menu),
     FindMatches(FindMatches),
     Link(Link),
+    Doctor(Doctor),
+    ImportCookies(ImportCookies),
+    Ui(Ui),
 }
 
 /// read the Kindle content catalog (cc.db) and print the reading snapshot.
@@ -193,6 +197,33 @@ struct Link {
     storygraph_id: String,
 }
 
+/// print a health report: config, cc.db, allowlist, state, optional network.
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "doctor")]
+struct Doctor {
+    /// path to cc.db (default: config cc_db_path)
+    #[argh(option)]
+    cc_db: Option<String>,
+
+    /// also verify the StoryGraph session over the network
+    #[argh(switch)]
+    network: bool,
+}
+
+/// import StoryGraph session cookies from a Netscape-format cookies.txt.
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "import-cookies")]
+struct ImportCookies {
+    /// path to the exported cookies.txt
+    #[argh(positional)]
+    path: String,
+}
+
+/// open the on-device settings UI (drawn directly to the e-ink framebuffer).
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "ui")]
+struct Ui {}
+
 fn main() {
     let args: Args = argh::from_env();
     if let Err(e) = run(args.command) {
@@ -316,6 +347,12 @@ fn run(cmd: Command) -> anyhow::Result<()> {
                 eprintln!("warning: could not update the KUAL menu: {e:#}");
             }
         }
+        Command::Doctor(d) => {
+            let cc_db = PathBuf::from(d.cc_db.unwrap_or_else(|| CONFIG.cc_db_path.clone()));
+            setup::doctor(&cc_db, d.network)?;
+        }
+        Command::ImportCookies(i) => setup::import_cookies(Path::new(&i.path))?,
+        Command::Ui(_) => kindlestorygraph::ui::run()?,
     }
     Ok(())
 }

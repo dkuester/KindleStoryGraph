@@ -38,6 +38,11 @@
       "name": "Stop sync daemon",
       "priority": 7,
       "action": "bin/stop.sh"
+    },
+    {
+      "name": "Open settings UI",
+      "priority": 8,
+      "action": "bin/ui.sh"
     }
   ]
 }

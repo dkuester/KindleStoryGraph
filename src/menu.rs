@@ -52,12 +52,12 @@ impl SearchCache {
 /// `cde_key → storygraph_id` for every book that already resolves to a
 /// StoryGraph book. Manual mappings take precedence; persisted sync state
 /// fills in the rest.
-fn linked_keys(manual_mappings_path: &Path, state_path: &Path) -> HashMap<String, String> {
+pub(crate) fn linked_keys(manual_mappings_path: &Path, state: &State) -> HashMap<String, String> {
     let mut linked = config::load_manual_mappings(manual_mappings_path);
-    if let Ok(state) = State::load(state_path) {
-        for (key, book) in state.books {
-            linked.entry(key).or_insert(book.storygraph_id);
-        }
+    for (key, book) in &state.books {
+        linked
+            .entry(key.clone())
+            .or_insert_with(|| book.storygraph_id.clone());
     }
     linked
 }
@@ -86,12 +86,19 @@ pub fn build_menu(cc_db: &Path) -> Value {
 ///   therefore has to live in `name`.
 fn render(cc_db: &Path) -> (Value, bool) {
     let allowlist = config::load_allowlist(Path::new(&CONFIG.allowlist_path));
-    let linked = linked_keys(
-        Path::new(&CONFIG.manual_mappings_path),
-        Path::new(&CONFIG.state_path),
-    );
+    let state = State::load(Path::new(&CONFIG.state_path)).unwrap_or_default();
+    let linked = linked_keys(Path::new(&CONFIG.manual_mappings_path), &state);
     let cache = SearchCache::load(Path::new(&CONFIG.search_cache_path)).unwrap_or_default();
-    render_with(cc_db, &allowlist, &linked, &cache)
+    let last_sync_at = state.books.values().map(|b| b.last_synced_at).max();
+    let cookies_set = !CONFIG.session_cookie.is_empty();
+    render_with(
+        cc_db,
+        &allowlist,
+        &linked,
+        &cache,
+        last_sync_at,
+        cookies_set,
+    )
 }
 
 /// `render` with its inputs injected (testable without touching `CONFIG`).
@@ -100,6 +107,8 @@ pub fn render_with(
     allowlist: &HashSet<String>,
     linked: &HashMap<String, String>,
     cache: &SearchCache,
+    last_sync_at: Option<i64>,
+    cookies_set: bool,
 ) -> (Value, bool) {
     let snapshot = Reader::open_read_only(cc_db.to_str().unwrap_or_default())
         .ok()
@@ -113,7 +122,7 @@ pub fn render_with(
 
     let mut selection: Vec<Value> = Vec::new();
     for book in &snapshot {
-        let mut name = book.title.clone();
+        let mut name = format!("{}  {}%", book.title, book.percent.round() as u32);
         if allowlist.contains(&book.cde_key) {
             name.push_str("  [sync]");
         }
@@ -136,6 +145,11 @@ pub fn render_with(
             "refresh": true,
         }));
     }
+
+    let synced = snapshot
+        .iter()
+        .filter(|b| allowlist.contains(&b.cde_key))
+        .count();
 
     let mut link_items: Vec<Value> = Vec::new();
     for book in &snapshot {
@@ -169,14 +183,45 @@ pub fn render_with(
         }));
     }
 
-    let mut items: Vec<Value> = vec![json!({
-        "name": "Sync selection",
-        "priority": 1,
-        "items": selection,
-    })];
+    let status_line = if !cookies_set {
+        "Cookies not set — run setup on a computer".to_owned()
+    } else {
+        match last_sync_at {
+            None => "Not synced yet — tap Sync now".to_owned(),
+            Some(t) => format!(
+                "Last sync {} ({} synced)",
+                crate::state::humanize_ago(t),
+                synced
+            ),
+        }
+    };
+
+    let selection_header = if has_books {
+        format!("Sync selection ({}/{})", synced, snapshot.len())
+    } else {
+        "Sync selection".to_owned()
+    };
+
+    let mut items: Vec<Value> = vec![
+        json!({
+            "name": "Status",
+            "priority": 0,
+            "items": [json!({
+                "name": status_line,
+                "action": "bin/refresh-menu.sh",
+                "exitmenu": false,
+                "refresh": true,
+            })],
+        }),
+        json!({
+            "name": selection_header,
+            "priority": 1,
+            "items": selection,
+        }),
+    ];
     if !link_items.is_empty() {
         items.push(json!({
-            "name": "Link books",
+            "name": format!("Link books ({})", link_items.len()),
             "priority": 2,
             "items": link_items,
         }));
@@ -207,6 +252,11 @@ pub fn render_with(
         "name": "Stop sync daemon",
         "priority": 7,
         "action": "bin/stop.sh",
+    }));
+    items.push(json!({
+        "name": "Open settings UI",
+        "priority": 8,
+        "action": "bin/ui.sh",
     }));
 
     (json!({ "items": items }), has_books)
@@ -240,10 +290,8 @@ pub fn write_menu(cc_db: &Path) -> Result<()> {
 /// whose search fails rather than aborting the batch. Returns the number of
 /// books searched; errors out only if every search failed.
 pub fn find_matches(cc_db: &Path, max_per_book: usize) -> Result<usize> {
-    let linked = linked_keys(
-        Path::new(&CONFIG.manual_mappings_path),
-        Path::new(&CONFIG.state_path),
-    );
+    let state = State::load(Path::new(&CONFIG.state_path)).unwrap_or_default();
+    let linked = linked_keys(Path::new(&CONFIG.manual_mappings_path), &state);
     let reader = Reader::open_read_only(cc_db.to_str().unwrap_or_default())?;
     let snapshot = reader.snapshot(CONFIG.finish_threshold, CONFIG.min_progress)?;
 
@@ -353,7 +401,7 @@ mod tests {
         );
         st.save(&state).unwrap();
 
-        let linked = linked_keys(&manual, &state);
+        let linked = linked_keys(&manual, &st);
         assert_eq!(linked["KEY1"], "manual-id"); // manual wins over state
         assert_eq!(linked["KEY2"], "state-id-2"); // state fills in the rest
 
@@ -419,8 +467,14 @@ mod tests {
         let mut allowlist = HashSet::new();
         allowlist.insert("KEY1".to_owned());
 
-        let (menu, has_books) =
-            render_with(&db, &allowlist, &HashMap::new(), &SearchCache::default());
+        let (menu, has_books) = render_with(
+            &db,
+            &allowlist,
+            &HashMap::new(),
+            &SearchCache::default(),
+            None,
+            false,
+        );
         assert!(has_books);
         let toggle = all_entries(&menu)
             .into_iter()
@@ -432,7 +486,7 @@ mod tests {
         assert_eq!(toggle["refresh"], true);
         assert_eq!(toggle["params"], "KEY1");
         // Persisted state lives in the name: KUAL's `checked` is press-only.
-        assert_eq!(toggle["name"], "Dune  [sync]");
+        assert_eq!(toggle["name"], "Dune  42%  [sync]");
         assert!(toggle.get("checked").is_none());
 
         std::fs::remove_file(&db).ok();
@@ -449,14 +503,21 @@ mod tests {
         let mut linked = HashMap::new();
         linked.insert("KEY1".to_owned(), "sg-1".to_owned());
 
-        let (menu, _) = render_with(&db, &allowlist, &linked, &SearchCache::default());
+        let (menu, _) = render_with(
+            &db,
+            &allowlist,
+            &linked,
+            &SearchCache::default(),
+            None,
+            false,
+        );
         let names: Vec<String> = all_entries(&menu)
             .into_iter()
             .filter(|e| e["action"] == "bin/toggle-book.sh")
             .map(|e| e["name"].as_str().unwrap_or_default().to_owned())
             .collect();
-        assert!(names.contains(&"Dune  [sync]  [linked]".to_owned()));
-        assert!(names.contains(&"Emma".to_owned()));
+        assert!(names.contains(&"Dune  42%  [sync]  [linked]".to_owned()));
+        assert!(names.contains(&"Emma  88%".to_owned()));
 
         std::fs::remove_file(&db).ok();
     }
@@ -474,7 +535,7 @@ mod tests {
             }],
         );
 
-        let (menu, _) = render_with(&db, &HashSet::new(), &HashMap::new(), &cache);
+        let (menu, _) = render_with(&db, &HashSet::new(), &HashMap::new(), &cache, None, false);
         let link = all_entries(&menu)
             .into_iter()
             .find(|e| e["action"] == "bin/link-book.sh")
@@ -496,6 +557,8 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             &SearchCache::default(),
+            None,
+            false,
         );
         assert!(
             !has_books,
@@ -507,5 +570,63 @@ mod tests {
                 .iter()
                 .any(|e| e["action"] == "bin/refresh-menu.sh")
         );
+    }
+
+    #[test]
+    fn status_group_reports_last_sync_and_cookie_warning() {
+        let db = temp_cc_db("ksg_test_menu_cc4.db", &[("KEY1", "Dune", 42.0)]);
+        let (menu, _) = render_with(
+            &db,
+            &HashSet::new(),
+            &HashMap::new(),
+            &SearchCache::default(),
+            Some(1_700_000_000),
+            true,
+        );
+        let status = &menu["items"][0];
+        assert_eq!(status["name"], "Status");
+        let line = status["items"][0]["name"].as_str().unwrap();
+        assert!(line.starts_with("Last sync"), "unexpected status: {line}");
+        assert!(line.contains("0 synced"), "unexpected status: {line}");
+
+        // Missing cookies override the sync timestamp.
+        let (menu2, _) = render_with(
+            &db,
+            &HashSet::new(),
+            &HashMap::new(),
+            &SearchCache::default(),
+            None,
+            false,
+        );
+        let line2 = menu2["items"][0]["items"][0]["name"].as_str().unwrap();
+        assert!(
+            line2.starts_with("Cookies not set"),
+            "unexpected status: {line2}"
+        );
+
+        std::fs::remove_file(&db).ok();
+    }
+
+    #[test]
+    fn selection_header_counts_synced_books() {
+        let db = temp_cc_db(
+            "ksg_test_menu_cc5.db",
+            &[("KEY1", "Dune", 42.0), ("KEY2", "Emma", 88.0)],
+        );
+        let mut allowlist = HashSet::new();
+        allowlist.insert("KEY1".to_owned());
+
+        let (menu, _) = render_with(
+            &db,
+            &allowlist,
+            &HashMap::new(),
+            &SearchCache::default(),
+            None,
+            false,
+        );
+        let header = &menu["items"][1]["name"];
+        assert_eq!(header, "Sync selection (1/2)");
+
+        std::fs::remove_file(&db).ok();
     }
 }

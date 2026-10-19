@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -10,6 +11,7 @@ pub struct Config {
     pub session_cookie: String,
     pub remember_user_token: String,
     pub user_slug: String,
+    pub language: String,
     pub debug: bool,
     pub cc_db_path: String,
     pub state_path: String,
@@ -31,6 +33,7 @@ impl Default for Config {
             session_cookie: String::new(),
             remember_user_token: String::new(),
             user_slug: String::new(),
+            language: "en".to_owned(),
             debug: false,
             cc_db_path: "/var/local/cc.db".to_owned(),
             state_path: "/mnt/us/extensions/kindlestorygraph/state.json".to_owned(),
@@ -77,6 +80,7 @@ pub fn parse_ini(content: &str) -> Config {
             "session_cookie" => cfg.session_cookie = value.to_owned(),
             "remember_user_token" => cfg.remember_user_token = value.to_owned(),
             "user_slug" => cfg.user_slug = value.to_owned(),
+            "language" => cfg.language = value.to_owned(),
             "debug" => cfg.debug = value.eq_ignore_ascii_case("true") || value == "1",
             "cc_db_path" => cfg.cc_db_path = value.to_owned(),
             "state_path" => cfg.state_path = value.to_owned(),
@@ -204,9 +208,64 @@ pub fn add_manual_mapping(path: &Path, cde_key: &str, storygraph_id: &str) -> Re
     Ok(())
 }
 
+/// Writes `updates` into a bare `key=value` INI file: an existing key's value
+/// is replaced in place, a missing key is appended at the end. Comments, blank
+/// lines and unrelated keys are preserved. Written atomically (temp + fsync +
+/// rename) so a suspend mid-write can't leave a truncated config.
+pub fn set_ini_keys(path: &Path, updates: &[(&str, &str)]) -> Result<()> {
+    let existing = fs::read_to_string(path).unwrap_or_default();
+    let mut out: Vec<String> = Vec::new();
+    let mut used = vec![false; updates.len()];
+
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        let mut handled = false;
+        if !(trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with(';')
+            || trimmed == "[General]")
+            && let Some((key, _)) = line.split_once('=')
+        {
+            let key = key.trim();
+            for (i, (k, v)) in updates.iter().enumerate() {
+                if *k == key {
+                    out.push(format!("{key}={v}"));
+                    used[i] = true;
+                    handled = true;
+                    break;
+                }
+            }
+        }
+        if !handled {
+            out.push(line.to_owned());
+        }
+    }
+
+    for (i, (k, v)) in updates.iter().enumerate() {
+        if !used[i] {
+            out.push(format!("{k}={v}"));
+        }
+    }
+
+    let content = format!("{}\n", out.join("\n"));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent dir of {}", path.display()))?;
+    }
+    let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+    {
+        let mut file = File::create(&tmp).with_context(|| format!("creating {tmp:?}"))?;
+        file.write_all(content.as_bytes())
+            .with_context(|| format!("writing {tmp:?}"))?;
+        file.sync_all()
+            .with_context(|| format!("flushing {tmp:?}"))?;
+    }
+    fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))
+}
+
 /// Resolves the config path: the `KINDLE_STORYGRAPH_CONFIG` env var if set
 /// (handy for host testing), otherwise `config.ini` next to the binary.
-fn config_path() -> Result<PathBuf> {
+pub fn config_path() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("KINDLE_STORYGRAPH_CONFIG") {
         return Ok(PathBuf::from(p));
     }
