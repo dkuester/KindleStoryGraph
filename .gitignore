@@ -16,6 +16,8 @@ search_cache.json
 
 # macOS
 .DS_Store
+.AppleDouble
+._*
 
 
 # Added by cargo
