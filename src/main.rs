@@ -5,6 +5,7 @@ use argh::FromArgs;
 use kindlestorygraph::config::{self, CONFIG};
 use kindlestorygraph::daemon;
 use kindlestorygraph::error::UserError;
+use kindlestorygraph::menu;
 use kindlestorygraph::reader::{self, Reader};
 use kindlestorygraph::storygraph::{self, parse_status_arg};
 
@@ -30,6 +31,8 @@ enum Command {
     Books(Books),
     Toggle(Toggle),
     Menu(Menu),
+    FindMatches(FindMatches),
+    Link(Link),
 }
 
 /// read the Kindle content catalog (cc.db) and print the reading snapshot.
@@ -160,6 +163,32 @@ struct Menu {
     cc_db: Option<String>,
 }
 
+/// search StoryGraph for unlinked books and cache candidates for the pick-list.
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "find-matches")]
+struct FindMatches {
+    /// path to cc.db (default: config cc_db_path)
+    #[argh(option)]
+    cc_db: Option<String>,
+
+    /// max candidates cached per book (default 5)
+    #[argh(option, default = "5")]
+    limit: usize,
+}
+
+/// link a Kindle book to a StoryGraph book in manual_mappings.ini.
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "link")]
+struct Link {
+    /// the Kindle content key (cde_key)
+    #[argh(positional)]
+    cde_key: String,
+
+    /// the StoryGraph book id
+    #[argh(positional)]
+    storygraph_id: String,
+}
+
 fn main() {
     let args: Args = argh::from_env();
     if let Err(e) = run(args.command) {
@@ -255,51 +284,23 @@ fn run(cmd: Command) -> anyhow::Result<()> {
         }
         Command::Menu(m) => {
             let cc_db = PathBuf::from(m.cc_db.unwrap_or_else(|| CONFIG.cc_db_path.clone()));
-            print_json(&build_menu(&cc_db));
+            print_json(&menu::build_menu(&cc_db));
+        }
+        Command::FindMatches(f) => {
+            let cc_db = PathBuf::from(f.cc_db.unwrap_or_else(|| CONFIG.cc_db_path.clone()));
+            let searched = menu::find_matches(&cc_db, f.limit)?;
+            println!("Searched {searched} book(s); candidates cached for 'Link books'.");
+        }
+        Command::Link(l) => {
+            config::add_manual_mapping(
+                Path::new(&CONFIG.manual_mappings_path),
+                &l.cde_key,
+                &l.storygraph_id,
+            )?;
+            println!("Linked {} -> {}", l.cde_key, l.storygraph_id);
         }
     }
     Ok(())
-}
-
-/// Build the KUAL `menu.json`: a per-book allowlist selection plus the standard
-/// sync/daemon actions. A missing or unreadable `cc.db` yields an empty
-/// selection (the menu stays usable).
-fn build_menu(cc_db: &Path) -> serde_json::Value {
-    let allowlist = config::load_allowlist(Path::new(&CONFIG.allowlist_path));
-    let snapshot = Reader::open_read_only(cc_db.to_str().unwrap_or_default())
-        .ok()
-        .and_then(|reader| {
-            reader
-                .snapshot(CONFIG.finish_threshold, CONFIG.min_progress)
-                .ok()
-        })
-        .unwrap_or_default();
-    let mut selection: Vec<serde_json::Value> = Vec::new();
-    for bk in &snapshot {
-        selection.push(serde_json::json!({
-            "name": bk.title,
-            "checked": allowlist.contains(&bk.cde_key),
-            "action": "bin/toggle-book.sh",
-            "params": bk.cde_key,
-            "refresh": true,
-        }));
-    }
-    if selection.is_empty() {
-        selection.push(serde_json::json!({
-            "name": "(no books with progress yet)",
-            "action": "bin/refresh-menu.sh",
-            "refresh": true,
-        }));
-    }
-    serde_json::json!({
-        "items": [
-            { "name": "Sync selection", "priority": 1, "items": selection },
-            { "name": "Refresh book list", "priority": 2, "action": "bin/refresh-menu.sh", "refresh": true },
-            { "name": "Sync now", "priority": 3, "action": "bin/sync-once.sh" },
-            { "name": "Start sync daemon", "priority": 4, "action": "bin/start.sh" },
-            { "name": "Stop sync daemon", "priority": 5, "action": "bin/stop.sh" }
-        ]
-    })
 }
 
 fn print_json<T: serde::Serialize>(v: &T) {

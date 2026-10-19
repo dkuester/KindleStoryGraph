@@ -12,6 +12,7 @@ state.json
 config.ini
 manual_mappings.ini
 allowlist.ini
+search_cache.json
 
 # macOS
 .DS_Store

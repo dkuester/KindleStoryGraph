@@ -58,6 +58,7 @@ min_progress=2.0
 manual_mappings_path=/mnt/us/extensions/kindlestorygraph/manual_mappings.ini
 sync_scope=allowlist
 allowlist_path=/mnt/us/extensions/kindlestorygraph/allowlist.ini
+search_cache_path=/mnt/us/extensions/kindlestorygraph/search_cache.json
 ```
 
 ## 4. Start the daemon
@@ -99,10 +100,29 @@ sync_scope=all
 
 Then all books with progress are synced and the selection is ignored.
 
-## 7. Manual mapping for unmatched books
+## 7. Linking books to StoryGraph
 
-Books whose title can't be matched automatically show up in the log as
-`no_match` and are skipped. To map one by hand:
+Books whose title can't be matched automatically are skipped as `no_match` in
+the log and stay unlinked. You can link them — or re-link a book to a
+different StoryGraph book — in two ways.
+
+### 7a. Pick from the KUAL menu (recommended)
+
+1. In KUAL Next → KindleStoryGraph, tap **Find matches for books**. This
+   searches StoryGraph (title + author) for every *unlinked* book and caches
+   the top 5 results. It needs Wi-Fi and valid cookies.
+2. Open **Link books**. Each unlinked book is listed; tap it to see the
+   matching StoryGraph books (title — author), then tap the correct one.
+3. The choice is written to `manual_mappings.ini` and takes effect on the next
+   sync; the book then shows a `[linked]` marker in **Sync selection**.
+
+Books already linked (by a previous sync or a manual mapping) don't appear in
+**Link books**; their entry in **Sync selection** carries the `[linked]`
+marker, so you can see at a glance what's linked and what isn't.
+
+### 7b. Edit `manual_mappings.ini` by hand
+
+To link a book manually, or override a wrong automatic match:
 
 1. Note its `cde_key` from the log (`NoMatch { cde_key: "..." }`), or find it
    with `kindlestorygraph snapshot <cc.db>`.
@@ -127,4 +147,4 @@ match.
   or above `min_progress` (default 2 %) — books you've only opened (Kindle
   jumps to ~1 %) are ignored. Title-matching is verified against StoryGraph,
   but `no_match` books are skipped (see the log) and can be
-  [mapped manually](#7-manual-mapping-for-unmatched-books).
+  [linked](#7-linking-books-to-storygraph).

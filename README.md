@@ -39,7 +39,10 @@ Run it two ways:
 - **Minimum-progress threshold**: books below 2 % (the Kindle's first-open jump)
   are ignored until you really start reading.
 - **Manual mapping**: pin `cde_key → StoryGraph id` for titles the search can't
-  match.
+  match — either from the KUAL menu ("Find matches" → "Link books") or by
+  editing `manual_mappings.ini`.
+- **Link status in the menu**: books already linked to StoryGraph show a
+  `[linked]` marker in "Sync selection".
 - **Diff-based sync**: only progress *changes* are pushed, throttled per book —
   never a full-library re-upload.
 

@@ -41,7 +41,10 @@ Zwei Betriebsarten:
 - **Mindestfortschritts-Schwelle**: Bücher unter 2 % (der Sprung beim ersten
   Öffnen) werden ignoriert, bis du wirklich liest.
 - **Manuelle Zuordnung**: `cde_key → StoryGraph-ID` für Titel, die die Suche
-  nicht zuordnen kann.
+  nicht zuordnen kann — entweder aus dem KUAL-Menü („Find matches" → „Link
+  books") oder per Bearbeiten der `manual_mappings.ini`.
+- **Link-Status im Menü**: Bereits mit StoryGraph verknüpfte Bücher zeigen in
+  „Sync selection" den Marker `[linked]`.
 - **Diff-basierter Sync**: Nur Fortschritts-*Änderungen* werden übertragen,
   pro Buch gedrosselt — nie ein Voll-Upload der Bibliothek.
 

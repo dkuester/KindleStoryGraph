@@ -21,6 +21,7 @@ pub struct Config {
     pub manual_mappings_path: String,
     pub sync_scope: String,
     pub allowlist_path: String,
+    pub search_cache_path: String,
 }
 
 impl Default for Config {
@@ -41,6 +42,7 @@ impl Default for Config {
                 .to_owned(),
             sync_scope: "allowlist".to_owned(),
             allowlist_path: "/mnt/us/extensions/kindlestorygraph/allowlist.ini".to_owned(),
+            search_cache_path: "/mnt/us/extensions/kindlestorygraph/search_cache.json".to_owned(),
         }
     }
 }
@@ -86,6 +88,7 @@ pub fn parse_ini(content: &str) -> Config {
             "manual_mappings_path" => cfg.manual_mappings_path = value.to_owned(),
             "sync_scope" => cfg.sync_scope = value.to_owned(),
             "allowlist_path" => cfg.allowlist_path = value.to_owned(),
+            "search_cache_path" => cfg.search_cache_path = value.to_owned(),
             _ => {}
         }
     }
@@ -170,6 +173,32 @@ pub fn toggle_allowlist(path: &Path, key: &str) -> Result<bool> {
     out.push('\n');
     fs::write(path, &out).with_context(|| format!("writing allowlist at {}", path.display()))?;
     Ok(!present)
+}
+
+/// Sets `cde_key = storygraph_id` in the manual mappings file, replacing any
+/// existing entry for that key while preserving other lines (including
+/// comments).
+pub fn add_manual_mapping(path: &Path, cde_key: &str, storygraph_id: &str) -> Result<()> {
+    let content = fs::read_to_string(path).unwrap_or_default();
+    let key = cde_key.trim();
+    let mut kept: Vec<&str> = Vec::new();
+    for line in content.lines() {
+        let bare = line.split('=').next().unwrap_or(line).trim();
+        if bare != key {
+            kept.push(line);
+        }
+    }
+    let mut out = kept.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(key);
+    out.push('=');
+    out.push_str(storygraph_id.trim());
+    out.push('\n');
+    fs::write(path, &out)
+        .with_context(|| format!("writing manual mappings at {}", path.display()))?;
+    Ok(())
 }
 
 /// Resolves the config path: the `KINDLE_STORYGRAPH_CONFIG` env var if set
@@ -273,6 +302,25 @@ mod tests {
 
         assert!(toggle_allowlist(&path, "B0123").unwrap()); // re-added
         assert!(load_allowlist(&path).contains("B0123"));
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn add_manual_mapping_adds_then_replaces() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("ksg_test_mappings.ini");
+        fs::write(&path, "# keep\nKEY1=id-1\n").unwrap();
+
+        add_manual_mapping(&path, "KEY2", "id-2").unwrap();
+        let m = load_manual_mappings(&path);
+        assert_eq!(m["KEY1"], "id-1");
+        assert_eq!(m["KEY2"], "id-2");
+
+        add_manual_mapping(&path, "KEY1", "id-9").unwrap();
+        let m = load_manual_mappings(&path);
+        assert_eq!(m["KEY1"], "id-9");
+        assert_eq!(m["KEY2"], "id-2");
 
         fs::remove_file(&path).ok();
     }

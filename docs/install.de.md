@@ -58,6 +58,7 @@ min_progress=2.0
 manual_mappings_path=/mnt/us/extensions/kindlestorygraph/manual_mappings.ini
 sync_scope=allowlist
 allowlist_path=/mnt/us/extensions/kindlestorygraph/allowlist.ini
+search_cache_path=/mnt/us/extensions/kindlestorygraph/search_cache.json
 ```
 
 ## 4. Daemon starten
@@ -101,10 +102,34 @@ sync_scope=all
 Dann werden alle Bücher mit Fortschritt synchronisiert und die Auswahl wird
 ignoriert.
 
-## 7. Manuelle Zuordnung für nicht identifizierbare Bücher
+## 7. Bücher mit StoryGraph verknüpfen
 
-Bücher, deren Titel sich nicht automatisch zuordnen lässt, erscheinen im Log
-als `no_match` und werden übersprungen. Manuell zuordnen:
+Bücher, deren Titel sich nicht automatisch zuordnen lässt, werden im Log als
+`no_match` übersprungen und bleiben unverknüpft. Du kannst sie — oder ein Buch
+neu mit einem anderen StoryGraph-Buch verknüpfen — auf zwei Arten zuordnen.
+
+### 7a. Aus dem KUAL-Menü wählen (empfohlen)
+
+1. In KUAL Next → KindleStoryGraph **Find matches for books** antippen. Das
+   sucht StoryGraph (Titel + Autor) für jedes *unverknüpfte* Buch ab und
+   speichert die Top-5-Treffer zwischen. Dafür braucht es WLAN und gültige
+   Cookies.
+2. **Link books** öffnen. Jedes unverknüpfte Buch ist gelistet; antippen, um
+   die passenden StoryGraph-Bücher zu sehen (Titel — Autor), dann das
+   richtige antippen.
+3. Die Auswahl wird in `manual_mappings.ini` geschrieben und greift beim
+   nächsten Sync; das Buch bekommt danach in **Sync selection** den Marker
+   `[linked]`.
+
+Bereits verknüpfte Bücher (durch einen früheren Sync oder eine manuelle
+Zuordnung) erscheinen nicht in **Link books**; ihr Eintrag in **Sync
+selection** trägt den `[linked]`-Marker, sodass du auf einen Blick siehst, was
+verknüpft ist und was nicht.
+
+### 7b. `manual_mappings.ini` von Hand bearbeiten
+
+Um ein Buch manuell zu verknüpfen oder eine falsche automatische Zuordnung zu
+überschreiben:
 
 1. Den `cde_key` aus dem Log notieren (`NoMatch { cde_key: "..." }`) oder mit
    `kindlestorygraph snapshot <cc.db>` ermitteln.
@@ -132,5 +157,4 @@ automatische Zuordnung.
   Bücher ab `min_progress` (Standard 2 %) — nur kurz geöffnete Bücher (der
   Kindle springt auf ~1 %) werden ignoriert. Das Titel-Matching ist gegen
   StoryGraph verifiziert, aber `no_match`-Bücher werden übersprungen (siehe
-  Log) und können
-  [manuell zugeordnet werden](#7-manuelle-zuordnung-für-nicht-identifizierbare-bücher).
+  Log) und können [verknüpft werden](#7-bücher-mit-storygraph-verknüpfen).

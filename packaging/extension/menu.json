@@ -12,24 +12,30 @@
       ]
     },
     {
+      "name": "Find matches for books",
+      "priority": 3,
+      "action": "bin/find-matches.sh",
+      "refresh": true
+    },
+    {
       "name": "Refresh book list",
-      "priority": 2,
+      "priority": 4,
       "action": "bin/refresh-menu.sh",
       "refresh": true
     },
     {
       "name": "Sync now",
-      "priority": 3,
+      "priority": 5,
       "action": "bin/sync-once.sh"
     },
     {
       "name": "Start sync daemon",
-      "priority": 4,
+      "priority": 6,
       "action": "bin/start.sh"
     },
     {
       "name": "Stop sync daemon",
-      "priority": 5,
+      "priority": 7,
       "action": "bin/stop.sh"
     }
   ]
