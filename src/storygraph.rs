@@ -13,6 +13,7 @@
 // progress. Goals/streak/feed/journal/reviews/editions are not ported.
 
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::{Client, Response};
@@ -196,14 +197,22 @@ fn check_session(response: &Response) -> Result<()> {
 // ── Low-level HTTP ────────────────────────────────────────────────────────────
 
 fn get(path: &str) -> Result<String> {
+    get_timeout(path, None)
+}
+
+/// `get` with an optional per-request timeout. The search UI runs this from a
+/// background thread and needs a bounded wait so a hung network can't leave the
+/// e-ink screen stuck on "Searching…" forever.
+fn get_timeout(path: &str, timeout: Option<Duration>) -> Result<String> {
     let url = format!("{BASE_URL}{path}");
     debug_log!("GET {url}");
 
     let res = retry(Exponential::from_millis(500).map(jitter).take(3), || {
-        client()?
-            .get(&url)
-            .send()
-            .context(format!("GET {url} failed"))
+        let mut req = client()?.get(&url);
+        if let Some(t) = timeout {
+            req = req.timeout(t);
+        }
+        req.send().context(format!("GET {url} failed"))
     })
     .map_err(|e| e.error)?;
 
@@ -418,10 +427,10 @@ pub fn get_user() -> Result<User> {
 /// Audio editions are filtered out.
 pub fn search(query: &str) -> Result<Vec<Book>> {
     require_credentials()?;
-    let html = get(&format!(
-        "/browse?search_term={}",
-        urlencoding::encode(query)
-    ))?;
+    let html = get_timeout(
+        &format!("/browse?search_term={}", urlencoding::encode(query)),
+        Some(Duration::from_secs(15)),
+    )?;
     let doc = Html::parse_document(&html);
 
     let container_sel = Selector::parse(".book-title-author-and-series").expect("valid selector");

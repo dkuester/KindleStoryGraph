@@ -40,6 +40,23 @@ pub(crate) fn build_rows(
         .collect()
 }
 
+/// Format the read-only settings screen into one line per setting (pure,
+/// host-testable). Labels are the config keys; the UI pads/truncates each line
+/// to the framebuffer width.
+#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
+pub(crate) fn settings_lines(cfg: &crate::config::Config) -> Vec<String> {
+    vec![
+        format!("min_progress        {:.1} %", cfg.min_progress),
+        format!("finish_threshold    {:.1} %", cfg.finish_threshold),
+        format!("language            {}", cfg.language),
+        format!("sync_scope          {}", cfg.sync_scope),
+        format!("cc.db               {}", cfg.cc_db_path),
+        format!("state               {}", cfg.state_path),
+        format!("manual mappings     {}", cfg.manual_mappings_path),
+        format!("allowlist           {}", cfg.allowlist_path),
+    ]
+}
+
 /// Truncate to at most `max` chars (with a `~` marker when cut).
 #[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 fn truncate_chars(s: &str, max: usize) -> String {
@@ -88,16 +105,19 @@ mod imp {
     use std::ffi::CString;
     use std::os::raw::{c_int, c_void};
     use std::path::Path;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     use anyhow::{Context, Result, bail};
 
-    use crate::config::{CONFIG, load_allowlist, toggle_allowlist};
+    use crate::config::{CONFIG, add_manual_mapping, load_allowlist, toggle_allowlist};
     use crate::daemon;
     use crate::fbink as fb;
     use crate::fbink::{FBInkConfig, FBInkState, InputEvent};
-    use crate::menu;
+    use crate::menu::{self, Candidate};
     use crate::reader::Reader;
     use crate::state::State;
+    use crate::storygraph::Book;
 
     /// Pick a UI string by configured language (German when `language` is "de").
     fn t(en: &'static str, de: &'static str) -> &'static str {
@@ -106,6 +126,10 @@ mod imp {
         } else {
             en
         }
+    }
+
+    fn de() -> bool {
+        CONFIG.language.eq_ignore_ascii_case("de")
     }
 
     /// Relative time ("just now", "3 min ago", ...), localized by config.
@@ -136,6 +160,40 @@ mod imp {
         }
     }
 
+    /// Classify a search error into a short, user-actionable line.
+    fn classify_search_error(msg: &str) -> String {
+        let lower = msg.to_lowercase();
+        if lower.contains("timed out") || lower.contains("timeout") {
+            t(
+                "Search timed out - check network",
+                "Suche: Zeitüberschreitung - Netz prüfen",
+            )
+            .to_owned()
+        } else if (lower.contains("session") && lower.contains("expired"))
+            || lower.contains("sign_in")
+        {
+            t(
+                "Session expired - refresh cookies",
+                "Sitzung abgelaufen - Cookies erneuern",
+            )
+            .to_owned()
+        } else if lower.contains("session_cookie") {
+            t(
+                "No cookies - run setup first",
+                "Keine Cookies - erst Setup ausführen",
+            )
+            .to_owned()
+        } else if lower.contains("error sending request")
+            || lower.contains("dns")
+            || lower.contains("connection")
+        {
+            t("No network connection", "Keine Netzwerkverbindung").to_owned()
+        } else {
+            // Raw message; the draw path truncates it to fit.
+            msg.to_owned()
+        }
+    }
+
     const FONT_MULT: u8 = 3;
     const TITLE_ROW: i16 = 0;
     const STATUS_ROW_1: i16 = 2;
@@ -144,6 +202,7 @@ mod imp {
     const SECTION_ROW: i16 = 6;
     const BOOK_START_ROW: i16 = 7;
     const BUTTON_OFFSET_FROM_BOTTOM: i16 = 3;
+    const UTIL_OFFSET_FROM_BOTTOM: i16 = 2;
     const HINT_OFFSET_FROM_BOTTOM: i16 = 1;
 
     /// Owns the framebuffer fd and a zeroed-but-init'd FBInk config.
@@ -254,6 +313,25 @@ mod imp {
         Exit,
     }
 
+    /// Which screen the UI is showing.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Screen {
+        Main,
+        Settings,
+        /// Pick a book to (re)link (scrollable list of all books).
+        Link,
+        /// Search running in the background; the tap loop polls for the result.
+        LinkSearch,
+        /// Show the candidate list for the chosen book.
+        LinkPick,
+    }
+
+    /// An in-flight StoryGraph search spawned on a background thread.
+    struct SearchPending {
+        rx: mpsc::Receiver<Result<Vec<Book>, String>>,
+        label: String,
+    }
+
     /// UI layout + mutable state for one session.
     struct Ui<'a> {
         fb: &'a Fb,
@@ -263,25 +341,56 @@ mod imp {
         last_sync: Option<i64>,
         cookies_set: bool,
         note: Option<String>, // transient status line (e.g. sync result)
+        screen: Screen,
+        list_offset: usize, // book-list scroll (Main & Link)
+        pick_offset: usize, // candidate-list scroll (LinkPick)
+        link_key: Option<String>,
+        candidates: Vec<Candidate>,
+        search: Option<SearchPending>,
     }
 
     impl<'a> Ui<'a> {
         fn button_row(&self) -> i16 {
             (self.fb.rows as i16 - BUTTON_OFFSET_FROM_BOTTOM).max(BOOK_START_ROW + 1)
         }
+        fn util_row(&self) -> i16 {
+            (self.fb.rows as i16 - UTIL_OFFSET_FROM_BOTTOM).max(BOOK_START_ROW + 2)
+        }
         fn hint_row(&self) -> i16 {
             self.fb.rows as i16 - HINT_OFFSET_FROM_BOTTOM
         }
+        /// Book slots visible (2 rows each), reserving one row for the
+        /// down-scroll indicator.
         fn visible_books(&self) -> usize {
-            let area = (self.button_row() - BOOK_START_ROW).max(0) as usize;
+            let area = (self.button_row() - BOOK_START_ROW - 1).max(0) as usize;
             area / 2
+        }
+        /// Row of the down-scroll indicator (immediately after the last book
+        /// slot, one row above the action buttons).
+        fn down_nav_row(&self) -> i16 {
+            BOOK_START_ROW + (self.visible_books() as i16) * 2
+        }
+        /// Candidate slots visible (1 row each), reserving one nav row.
+        fn cand_visible(&self) -> usize {
+            (self.button_row() - BOOK_START_ROW - 1).max(0) as usize
         }
 
         fn draw(&self, flash: bool) {
-            let fb = self.fb;
-            fb.cls();
+            self.fb.cls();
+            match self.screen {
+                Screen::Main => self.draw_main(),
+                Screen::Settings => self.draw_settings(),
+                Screen::Link => self.draw_link(),
+                Screen::LinkSearch => self.draw_link_search(),
+                Screen::LinkPick => self.draw_link_pick(),
+            }
+            self.fb.refresh(flash);
+        }
 
-            // Title bar (full-width, inverted).
+        // ── Main screen ─────────────────────────────────────────────────────
+
+        fn draw_main(&self) {
+            let fb = self.fb;
             fb.print(
                 TITLE_ROW,
                 0,
@@ -290,7 +399,6 @@ mod imp {
                 false,
             );
 
-            // Status block.
             let last = match self.last_sync {
                 Some(ts) => format!("{} {}", t("Last sync:", "Letzter Sync:"), rel_ago(ts)),
                 None => t("Not synced yet", "Noch nicht synchronisiert").to_owned(),
@@ -330,16 +438,85 @@ mod imp {
                 false,
             );
 
-            // Section label.
-            fb.print(SECTION_ROW, 2, &t("BOOKS", "BÜCHER"), false, false);
+            self.draw_book_list();
 
-            // Book list (2 rows each; allowlisted rows are inverted).
+            // Action row: sync left, exit right.
+            let btn = self.button_row();
+            fb.print(
+                btn,
+                2,
+                &t("  [ Sync now ]", "  [ Sync jetzt ]"),
+                false,
+                false,
+            );
+            let exit_label = t(" [ Exit ]", " [ Beenden ]");
+            let exit_col = self.fb.cols as i16 - exit_label.chars().count() as i16 - 2;
+            fb.print(btn, exit_col.max(0), exit_label, false, false);
+
+            // Util row: settings left, link right.
+            let util = self.util_row();
+            fb.print(
+                util,
+                2,
+                &t("  [ Settings ]", "  [ Einstellungen ]"),
+                false,
+                false,
+            );
+            let link_label = t(" [ Link ]", " [ Verknüpfen ]");
+            let link_col = self.fb.cols as i16 - link_label.chars().count() as i16 - 2;
+            fb.print(util, link_col.max(0), link_label, false, false);
+
+            fb.print(
+                self.hint_row(),
+                2,
+                &pad_right(
+                    t(
+                        "Book = sync   ^ = up   v = down",
+                        "Buch = Sync   ^ = hoch   v = runter",
+                    ),
+                    self.fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+
+            self.draw_note();
+        }
+
+        // ── Shared book list (Main & Link) ──────────────────────────────────
+
+        /// Draws the section header (with pagination + up indicator), the
+        /// visible book slice, and the down-scroll indicator. Uses
+        /// `self.list_offset`.
+        fn draw_book_list(&self) {
+            let fb = self.fb;
+            let total = self.rows.len();
+            let visible = self.visible_books();
+            let max_offset = total.saturating_sub(visible);
+            let up = self.list_offset > 0;
+            let down = self.list_offset < max_offset;
+
+            let mut header = String::new();
+            if up {
+                header.push_str("^ ");
+            }
+            header.push_str(t("BOOKS", "BÜCHER"));
+            if total > 0 {
+                let first = self.list_offset + 1;
+                let last = (self.list_offset + visible).min(total);
+                header.push_str(&format!(" ({first}-{last}/{total})"));
+            }
+            fb.print(
+                SECTION_ROW,
+                2,
+                &pad_right(&header, fb.cols.saturating_sub(2)),
+                up,
+                false,
+            );
+
             let mut r = BOOK_START_ROW;
-            let vis = self.visible_books();
-            for (i, book) in self.rows.iter().enumerate() {
-                if i >= vis {
-                    break;
-                }
+            for i in self.list_offset..(self.list_offset + visible).min(total) {
+                let book = &self.rows[i];
                 let title = pad_right(&book.title, fb.cols.saturating_sub(2));
                 let mut meta = format!(" {:>3.0}%", book.percent);
                 if !book.author.is_empty() {
@@ -355,13 +532,266 @@ mod imp {
                 fb.print(r + 1, 2, &meta, book.allowlisted, false);
                 r += 2;
             }
-            // "+N more" if the list is longer than fits.
-            if self.rows.len() > vis {
-                // simpler localized label:
-                let label = if CONFIG.language.eq_ignore_ascii_case("de") {
-                    format!("  + {} weitere", self.rows.len() - vis)
+
+            if down {
+                let n = total - (self.list_offset + visible);
+                let label = if de() {
+                    format!("  v {} weitere", n)
                 } else {
-                    format!("  + {} more", self.rows.len() - vis)
+                    format!("  v {} more", n)
+                };
+                fb.print(
+                    self.down_nav_row(),
+                    2,
+                    &pad_right(&label, fb.cols.saturating_sub(2)),
+                    true,
+                    false,
+                );
+            }
+        }
+
+        fn draw_note(&self) {
+            if let Some(note) = &self.note {
+                self.fb.print(
+                    SECTION_ROW,
+                    2,
+                    &pad_right(note, self.fb.cols.saturating_sub(2)),
+                    true,
+                    false,
+                );
+            }
+        }
+
+        // ── Settings screen ─────────────────────────────────────────────────
+
+        fn draw_settings(&self) {
+            let fb = self.fb;
+            fb.print(
+                TITLE_ROW,
+                0,
+                &pad_center("KindleStoryGraph", fb.cols),
+                true,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_1,
+                2,
+                &pad_right(
+                    &t("Settings (read-only)", "Einstellungen (nur lesen)"),
+                    fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+
+            let lines = super::settings_lines(&CONFIG);
+            let mut r = SECTION_ROW;
+            for line in &lines {
+                if r >= self.button_row() {
+                    break;
+                }
+                fb.print(
+                    r,
+                    2,
+                    &pad_right(line, fb.cols.saturating_sub(2)),
+                    false,
+                    false,
+                );
+                r += 1;
+            }
+
+            fb.print(
+                self.button_row(),
+                2,
+                &t(" [ Back ]", " [ Zurück ]"),
+                false,
+                false,
+            );
+            fb.print(
+                self.hint_row(),
+                2,
+                &pad_right(
+                    t("Read-only - tap Back", "Nur lesen - Zurück antippen"),
+                    self.fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+        }
+
+        // ── Link screens ────────────────────────────────────────────────────
+
+        fn draw_link(&self) {
+            let fb = self.fb;
+            fb.print(
+                TITLE_ROW,
+                0,
+                &pad_center("KindleStoryGraph", fb.cols),
+                true,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_1,
+                2,
+                &pad_right(
+                    &t("Link a book", "Buch verknüpfen"),
+                    fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_2,
+                2,
+                &pad_right(
+                    &t(
+                        "Tap a book to search StoryGraph",
+                        "Buch antippen = StoryGraph-Suche",
+                    ),
+                    fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+
+            self.draw_book_list();
+
+            fb.print(
+                self.button_row(),
+                2,
+                &t(" [ Back ]", " [ Zurück ]"),
+                false,
+                false,
+            );
+            fb.print(
+                self.hint_row(),
+                2,
+                &pad_right(
+                    t(
+                        "Book = search   ^ = up   v = down",
+                        "Buch = Suche   ^ = hoch   v = runter",
+                    ),
+                    self.fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+
+            self.draw_note();
+        }
+
+        fn draw_link_search(&self) {
+            let fb = self.fb;
+            fb.print(
+                TITLE_ROW,
+                0,
+                &pad_center("KindleStoryGraph", fb.cols),
+                true,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_2,
+                2,
+                &pad_right(&t("Searching...", "Suchen..."), fb.cols.saturating_sub(2)),
+                false,
+                false,
+            );
+            let label = self
+                .search
+                .as_ref()
+                .map(|s| s.label.clone())
+                .unwrap_or_default();
+            fb.print(
+                STATUS_ROW_3,
+                2,
+                &pad_right(
+                    &truncate_chars(&label, fb.cols.saturating_sub(2)),
+                    fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+            fb.print(
+                self.button_row(),
+                2,
+                &t(" [ Cancel ]", " [ Abbrechen ]"),
+                false,
+                false,
+            );
+            fb.print(
+                self.hint_row(),
+                2,
+                &pad_right(
+                    t("Waiting for StoryGraph", "Warte auf StoryGraph"),
+                    self.fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+        }
+
+        fn draw_link_pick(&self) {
+            let fb = self.fb;
+            fb.print(
+                TITLE_ROW,
+                0,
+                &pad_center("KindleStoryGraph", fb.cols),
+                true,
+                false,
+            );
+
+            let book_title = self
+                .link_key
+                .as_ref()
+                .and_then(|k| self.rows.iter().find(|b| &b.cde_key == k))
+                .map(|b| b.title.clone())
+                .unwrap_or_default();
+            fb.print(
+                STATUS_ROW_1,
+                2,
+                &pad_right(
+                    &format!(
+                        "{} {}",
+                        t("Link:", "Verknüpfen:"),
+                        truncate_chars(&book_title, fb.cols.saturating_sub(10))
+                    ),
+                    fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+
+            let total = self.candidates.len();
+            let visible = self.cand_visible();
+            let max_offset = total.saturating_sub(visible);
+            let up = self.pick_offset > 0;
+            let down = self.pick_offset < max_offset;
+
+            let mut header = String::new();
+            if up {
+                header.push_str("^ ");
+            }
+            header.push_str(t("RESULTS", "TREFFER"));
+            if total > 0 {
+                let first = self.pick_offset + 1;
+                let last = (self.pick_offset + visible).min(total);
+                header.push_str(&format!(" ({first}-{last}/{total})"));
+            }
+            fb.print(
+                SECTION_ROW,
+                2,
+                &pad_right(&header, fb.cols.saturating_sub(2)),
+                up,
+                false,
+            );
+
+            let mut r = BOOK_START_ROW;
+            for i in self.pick_offset..(self.pick_offset + visible).min(total) {
+                let c = &self.candidates[i];
+                let label = if c.author.is_empty() || c.author == "Unknown Author" {
+                    c.title.clone()
+                } else {
+                    format!("{} - {}", c.title, c.author)
                 };
                 fb.print(
                     r,
@@ -370,74 +800,112 @@ mod imp {
                     false,
                     false,
                 );
+                r += 1;
             }
 
-            // Buttons.
-            let btn = self.button_row();
-            fb.print(
-                btn,
-                2,
-                &t("  [ Sync now ]", "  [ Sync jetzt ]"),
-                false,
-                false,
-            );
-            let exit_label = t(" [ Exit ]", " [ Beenden ]");
-            let exit_col = self.fb.cols as i16 - exit_label.chars().count() as i16 - 2;
-            fb.print(btn, exit_col.max(0), exit_label, false, false);
-
-            // Hint line.
-            let hint = t(
-                "Tap a book to toggle sync",
-                "Buch antippen = Sync umschalten",
-            );
-            fb.print(
-                self.hint_row(),
-                2,
-                &pad_right(hint, self.fb.cols.saturating_sub(2)),
-                false,
-                false,
-            );
-
-            // Transient note over the section row area.
-            if let Some(note) = &self.note {
+            if down {
+                let n = total - (self.pick_offset + visible);
+                let label = if de() {
+                    format!("  v {} weitere", n)
+                } else {
+                    format!("  v {} more", n)
+                };
                 fb.print(
-                    SECTION_ROW,
+                    self.button_row() - 1,
                     2,
-                    &pad_right(note, self.fb.cols.saturating_sub(2)),
+                    &pad_right(&label, fb.cols.saturating_sub(2)),
                     true,
                     false,
                 );
             }
 
-            fb.refresh(flash);
+            fb.print(
+                self.button_row(),
+                2,
+                &t(" [ Back ]", " [ Zurück ]"),
+                false,
+                false,
+            );
+            fb.print(
+                self.hint_row(),
+                2,
+                &pad_right(
+                    t("Tap a match to link", "Treffer antippen = verknüpfen"),
+                    self.fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
         }
 
-        /// Map a touch position (raw panel coords) to an action.
-        fn tap(&mut self, x: i32, y: i32) -> Tap {
-            let fb = self.fb;
-            let (x, y) = fb.map_touch(x, y);
-            // Account for the vertical viewport origin before dividing into rows.
-            let row = ((y - fb.view_vert_origin as i32).max(0) / fb.fh as i32) as i16;
-            let col = (x.max(0) / fb.fw as i32) as i16;
+        // ── Tap handling ────────────────────────────────────────────────────
 
-            // Buttons row.
+        fn tap(&mut self, x: i32, y: i32) -> Tap {
+            let (x, y) = self.fb.map_touch(x, y);
+            let row = ((y - self.fb.view_vert_origin as i32).max(0) / self.fb.fh as i32) as i16;
+            let col = (x.max(0) / self.fb.fw as i32) as i16;
+            match self.screen {
+                Screen::Main => self.tap_main(row, col),
+                Screen::Settings => self.tap_settings(row, col),
+                Screen::Link => self.tap_link(row, col),
+                Screen::LinkSearch => self.tap_link_search(row, col),
+                Screen::LinkPick => self.tap_link_pick(row, col),
+            }
+        }
+
+        /// Scroll the book list up one page; returns true when it moved.
+        fn scroll_up(&mut self) -> bool {
+            if self.list_offset == 0 {
+                return false;
+            }
+            let vis = self.visible_books();
+            self.list_offset = self.list_offset.saturating_sub(vis);
+            true
+        }
+
+        /// Scroll the book list down one page; returns true when it moved.
+        fn scroll_down(&mut self) -> bool {
+            let vis = self.visible_books();
+            let max = self.rows.len().saturating_sub(vis);
+            if self.list_offset >= max {
+                return false;
+            }
+            self.list_offset = (self.list_offset + vis).min(max);
+            true
+        }
+
+        fn tap_main(&mut self, row: i16, col: i16) -> Tap {
+            let half = self.fb.cols as i16 / 2;
             if row == self.button_row() {
-                if col >= self.fb.cols as i16 / 2 {
+                if col >= half {
                     return Tap::Exit;
                 }
-                // Sync now.
                 match self.sync_now() {
                     Ok(summary) => self.note = Some(summary),
-                    Err(e) => self.note = Some(format!("{}", e)),
+                    Err(e) => self.note = Some(format!("{e}")),
                 }
                 return Tap::Redraw;
             }
-
-            // Book rows.
-            if row >= BOOK_START_ROW && row < self.button_row() {
-                let idx = ((row - BOOK_START_ROW) / 2) as usize;
-                let vis = self.visible_books();
-                if idx < vis && idx < self.rows.len() {
+            if row == self.util_row() {
+                if col >= half {
+                    self.screen = Screen::Link;
+                    self.list_offset = 0;
+                    self.note = None;
+                } else {
+                    self.screen = Screen::Settings;
+                    self.note = None;
+                }
+                return Tap::Redraw;
+            }
+            if row == SECTION_ROW && self.scroll_up() {
+                return Tap::Redraw;
+            }
+            if row == self.down_nav_row() && self.scroll_down() {
+                return Tap::Redraw;
+            }
+            if row >= BOOK_START_ROW && row < self.down_nav_row() {
+                let idx = self.list_offset + ((row - BOOK_START_ROW) / 2) as usize;
+                if idx < self.rows.len() {
                     let key = self.rows[idx].cde_key.clone();
                     let allowed =
                         toggle_allowlist(Path::new(&CONFIG.allowlist_path), &key).unwrap_or(false);
@@ -447,8 +915,165 @@ mod imp {
                     return Tap::Redraw;
                 }
             }
-
             Tap::None
+        }
+
+        fn tap_settings(&mut self, row: i16, _col: i16) -> Tap {
+            if row == self.button_row() || row == self.util_row() {
+                self.screen = Screen::Main;
+                self.note = None;
+                return Tap::Redraw;
+            }
+            Tap::None
+        }
+
+        fn tap_link(&mut self, row: i16, _col: i16) -> Tap {
+            if row == self.button_row() {
+                self.screen = Screen::Main;
+                self.note = None;
+                return Tap::Redraw;
+            }
+            if row == SECTION_ROW && self.scroll_up() {
+                return Tap::Redraw;
+            }
+            if row == self.down_nav_row() && self.scroll_down() {
+                return Tap::Redraw;
+            }
+            if row >= BOOK_START_ROW && row < self.down_nav_row() {
+                let idx = self.list_offset + ((row - BOOK_START_ROW) / 2) as usize;
+                if idx < self.rows.len() {
+                    self.start_link_search(idx);
+                    return Tap::Redraw;
+                }
+            }
+            Tap::None
+        }
+
+        fn tap_link_search(&mut self, row: i16, _col: i16) -> Tap {
+            if row == self.button_row() {
+                // Drop the receiver; the background thread's send then fails
+                // harmlessly (it is killed when the process exits).
+                self.search = None;
+                self.screen = Screen::Link;
+                self.note = None;
+                return Tap::Redraw;
+            }
+            Tap::None
+        }
+
+        fn tap_link_pick(&mut self, row: i16, _col: i16) -> Tap {
+            if row == self.button_row() {
+                self.screen = Screen::Link;
+                self.note = None;
+                return Tap::Redraw;
+            }
+            if row == SECTION_ROW && self.pick_offset > 0 {
+                let vis = self.cand_visible();
+                self.pick_offset = self.pick_offset.saturating_sub(vis);
+                return Tap::Redraw;
+            }
+            if row == self.button_row() - 1 {
+                let vis = self.cand_visible();
+                let max = self.candidates.len().saturating_sub(vis);
+                if self.pick_offset < max {
+                    self.pick_offset = (self.pick_offset + vis).min(max);
+                    return Tap::Redraw;
+                }
+                return Tap::None;
+            }
+            if row >= BOOK_START_ROW && row < self.button_row() - 1 {
+                let idx = self.pick_offset + (row - BOOK_START_ROW) as usize;
+                if idx < self.candidates.len() {
+                    let id = self.candidates[idx].id.clone();
+                    let Some(key) = self.link_key.clone() else {
+                        return Tap::None;
+                    };
+                    match add_manual_mapping(Path::new(&CONFIG.manual_mappings_path), &key, &id) {
+                        Ok(()) => {
+                            self.mark_linked(&key);
+                            self.note = Some(t("Linked", "Verknüpft").to_owned());
+                            self.screen = Screen::Main;
+                            self.list_offset = 0;
+                        }
+                        Err(e) => {
+                            self.note = Some(format!("{e}"));
+                            self.screen = Screen::Link;
+                        }
+                    }
+                    if let Err(e) = menu::write_menu(Path::new(&CONFIG.cc_db_path)) {
+                        eprintln!("warning: could not update the KUAL menu: {e:#}");
+                    }
+                    return Tap::Redraw;
+                }
+            }
+            Tap::None
+        }
+
+        /// Mark the just-linked book as linked in the display rows.
+        fn mark_linked(&mut self, key: &str) {
+            if let Some(row) = self.rows.iter_mut().find(|b| b.cde_key == key) {
+                row.linked = true;
+            }
+        }
+
+        /// Kick off a background StoryGraph search for the book at `idx`.
+        fn start_link_search(&mut self, idx: usize) {
+            let book = &self.rows[idx];
+            let key = book.cde_key.clone();
+            let query = if book.author.is_empty() {
+                book.title.clone()
+            } else {
+                format!("{} {}", book.title, book.author)
+            };
+            let label = book.title.clone();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let res = crate::storygraph::search(&query).map_err(|e| format!("{e:#}"));
+                let _ = tx.send(res);
+            });
+            self.link_key = Some(key);
+            self.search = Some(SearchPending { rx, label });
+            self.screen = Screen::LinkSearch;
+            self.note = None;
+        }
+
+        /// Poll the in-flight search channel; on completion update the screen
+        /// and return true (caller redraws).
+        fn drain_search(&mut self) -> bool {
+            let result = match &self.search {
+                Some(p) => p.rx.try_recv(),
+                None => return false,
+            };
+            let Ok(res) = result else {
+                return false;
+            };
+            // Drop the receiver; the background thread's send then fails
+            // harmlessly and the thread is killed when the process exits.
+            self.search = None;
+            match res {
+                Ok(books) if books.is_empty() => {
+                    self.note = Some(t("No results", "Keine Treffer").to_owned());
+                    self.screen = Screen::Link;
+                }
+                Ok(books) => {
+                    self.candidates = books
+                        .into_iter()
+                        .take(10)
+                        .map(|b| Candidate {
+                            id: b.id,
+                            title: b.title,
+                            author: b.author,
+                        })
+                        .collect();
+                    self.pick_offset = 0;
+                    self.screen = Screen::LinkPick;
+                }
+                Err(e) => {
+                    self.note = Some(classify_search_error(&e));
+                    self.screen = Screen::Link;
+                }
+            }
+            true
         }
 
         fn sync_now(&mut self) -> Result<String> {
@@ -518,6 +1143,12 @@ mod imp {
                 last_sync,
                 cookies_set,
                 note: None,
+                screen: Screen::Main,
+                list_offset: 0,
+                pick_offset: 0,
+                link_key: None,
+                candidates: Vec::new(),
+                search: None,
             },
             Err(e) => {
                 show_error(&fb, &format!("{e:#}"));
@@ -527,14 +1158,26 @@ mod imp {
 
         ui.draw(true);
 
-        // Input loop.
+        // Input loop. The touch fd is made non-blocking so the loop can also
+        // poll for a completed background search instead of freezing on a
+        // blocking read while the network is busy.
         let touch_fd = open_touchscreen()?;
+        unsafe {
+            let flags = libc::fcntl(touch_fd, libc::F_GETFL);
+            if flags >= 0 {
+                libc::fcntl(touch_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+        }
         let mut touching = false;
         let mut was_touching = false;
         let mut x = 0i32;
         let mut y = 0i32;
 
         loop {
+            if ui.drain_search() {
+                ui.draw(false);
+            }
+
             let mut ev: InputEvent = unsafe { std::mem::zeroed() };
             let n = unsafe {
                 libc::read(
@@ -544,6 +1187,9 @@ mod imp {
                 )
             };
             if n != std::mem::size_of::<InputEvent>() as isize {
+                // No event pending (non-blocking read); brief sleep so the
+                // loop doesn't busy-spin, then check the search channel again.
+                std::thread::sleep(Duration::from_millis(15));
                 continue;
             }
             match ev.type_ {
@@ -671,7 +1317,7 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_rows, pad_center, pad_right, truncate_chars};
+    use super::{build_rows, pad_center, pad_right, settings_lines, truncate_chars};
     use crate::reader::{BookProgress, Status};
     use std::collections::{HashMap, HashSet};
 
@@ -721,5 +1367,39 @@ mod tests {
         assert!(rows[1].linked);
         assert_eq!(rows[0].percent, 42.0);
         assert_eq!(rows[0].title, "T1");
+    }
+
+    #[test]
+    fn settings_lines_show_config_values() {
+        let cfg = crate::config::Config {
+            min_progress: 2.0,
+            finish_threshold: 99.5,
+            language: "de".to_owned(),
+            sync_scope: "allowlist".to_owned(),
+            cc_db_path: "/a/cc.db".to_owned(),
+            state_path: "/a/state.json".to_owned(),
+            manual_mappings_path: "/a/map.ini".to_owned(),
+            allowlist_path: "/a/allow.ini".to_owned(),
+            ..crate::config::Config::default()
+        };
+
+        let lines = settings_lines(&cfg);
+        assert_eq!(lines.len(), 8);
+        assert!(lines[0].contains("min_progress"));
+        assert!(lines[0].contains("2.0"));
+        assert!(lines[1].contains("finish_threshold"));
+        assert!(lines[1].contains("99.5"));
+        assert!(lines[2].contains("language"));
+        assert!(lines[2].contains("de"));
+        assert!(lines[3].contains("sync_scope"));
+        assert!(lines[3].contains("allowlist"));
+        assert!(lines[4].contains("cc.db"));
+        assert!(lines[4].contains("/a/cc.db"));
+        assert!(lines[5].contains("state"));
+        assert!(lines[5].contains("/a/state.json"));
+        assert!(lines[6].contains("manual mappings"));
+        assert!(lines[6].contains("/a/map.ini"));
+        assert!(lines[7].contains("allowlist"));
+        assert!(lines[7].contains("/a/allow.ini"));
     }
 }
