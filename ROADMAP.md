@@ -17,6 +17,9 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   book no longer closes the launcher), selection/link state shown in the entry
   label instead of KUAL's press-only `checked`, and one binary call per action
   so `menu.json` is rewritten inside the launcher's ~250 ms refresh window.
+- `state.json` is written atomically (temp file → fsync → rename), and a
+  corrupt file is archived as `state.json.corrupt-<epoch>` and replaced by an
+  empty state instead of failing every sync cycle forever.
 
 ## Quick wins
 
