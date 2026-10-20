@@ -1100,10 +1100,16 @@ mod imp {
                         self.last_sync = state.books.values().map(|b| b.last_synced_at).max();
                     }
                     self.note = None;
-                    let summary = if CONFIG.language.eq_ignore_ascii_case("de") {
-                        format!("Sync fertig: {} Änderungen", outcomes.len())
-                    } else {
-                        format!("Sync done: {} change(s)", outcomes.len())
+                    let changes = outcomes.iter().filter(|o| o.is_change()).count();
+                    let failed = outcomes
+                        .iter()
+                        .filter(|o| matches!(o, crate::sync::Outcome::Failed { .. }))
+                        .count();
+                    let summary = match (CONFIG.language.eq_ignore_ascii_case("de"), failed) {
+                        (true, 0) => format!("Sync fertig: {changes} Änderungen"),
+                        (true, f) => format!("Sync: {changes} Änderungen, {f} Fehler (Log)"),
+                        (false, 0) => format!("Sync done: {changes} change(s)"),
+                        (false, f) => format!("Sync: {changes} change(s), {f} failed (log)"),
                     };
                     Ok(summary)
                 }
