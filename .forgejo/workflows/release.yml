@@ -1,34 +1,110 @@
 name: Release
 
-# Builds a static armhf binary and packages it as a KUAL extension zip,
-# attached to the release when a `v*` tag is pushed.
+# Builds the static armhf binary, packages it as a KUAL extension zip and
+# attaches it to the Forgejo release when a `v*` tag is pushed.
+#
+# Pull requests that touch the release pipeline run the same build without
+# publishing, so a broken pipeline shows up in review instead of on the next
+# tag.
 
 on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    paths:
+      - '.forgejo/workflows/release.yml'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'packaging/**'
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build-armhf:
-    # Needs more time/CPU than codeberg-tiny (cross toolchain + full build).
+    # Cross toolchain + full release build: needs codeberg-medium's 10 minutes.
     runs-on: codeberg-medium
+    # The same image as `just build`: it ships the armv7-musl gcc that
+    # build.rs uses for FBInk and that aws-lc-sys/rusqlite need for their C
+    # code. It has no node, so no JavaScript actions below — checkout and
+    # upload are plain git/curl.
+    container:
+      image: messense/rust-musl-cross:armv7-musleabihf
+    env:
+      RUST_TARGET: armv7-unknown-linux-musleabihf
     steps:
-      - uses: actions/checkout@v4
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
+      - name: Checkout
+        run: |
+          git init -q .
+          git remote add origin "${{ github.server_url }}/${{ github.repository }}.git"
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            ref="refs/pull/${{ github.event.pull_request.number }}/head"
+          else
+            ref="${{ github.ref }}"
+          fi
+          git fetch -q --depth 1 origin "$ref"
+          git checkout -q FETCH_HEAD
+          git log -1 --oneline
+
+      - name: Check tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${{ github.ref_name }}"
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "${tag#v}" != "$version" ]; then
+            echo "Tag $tag does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+
       - name: Build static armhf binary
-        run: cargo zigbuild --release --target armv7-unknown-linux-musleabihf
-      - name: Assemble KUAL extension
+        run: cargo build --release --locked --target "$RUST_TARGET"
+
+      - name: Package KUAL extension zip
         run: |
-          mkdir -p packaging/extension/bin
-          cp target/armv7-unknown-linux-musleabihf/release/kindlestorygraph packaging/extension/bin/kindlestorygraph
-          cp config_example.ini packaging/extension/config_example.ini
-      - name: Package zip
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            version="${{ github.ref_name }}"
+            version="${version#v}"
+          else
+            version="dev-$(git rev-parse --short HEAD)"
+          fi
+          ext=packaging/extension
+          # Same file set as `just package`.
+          cp "target/$RUST_TARGET/release/kindlestorygraph" "$ext/bin/kindlestorygraph"
+          chmod +x "$ext/bin/kindlestorygraph"
+          cp config_example.ini manual_mappings.example.ini allowlist.example.ini "$ext/"
+          zip="kindlestorygraph-$version-kual.zip"
+          # The image has no `zip`; Python's zipfile keeps the exec bits.
+          python3 - "$ext" "$zip" <<'EOF'
+          import os, sys, zipfile
+          src, out = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for root, _, files in os.walk(src):
+                  for name in sorted(files):
+                      path = os.path.join(root, name)
+                      z.write(path, os.path.relpath(path, src))
+          EOF
+          python3 -m zipfile -l "$zip"
+          echo "ZIP=$zip" >> "$GITHUB_ENV"
+
+      - name: Attach zip to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd packaging/extension
-          zip -r ../../kindlestorygraph-kual.zip .
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: kindlestorygraph-kual
-          path: kindlestorygraph-kual.zip
+          api="${{ github.server_url }}/api/v1/repos/${{ github.repository }}"
+          tag="${{ github.ref_name }}"
+          auth="Authorization: token $TOKEN"
+          json_id() { python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'; }
+          # Reuse a release created by hand for this tag, else create one.
+          if ! id=$(curl -sf -H "$auth" "$api/releases/tags/$tag" | json_id); then
+            id=$(curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' \
+              -d "{\"tag_name\": \"$tag\", \"name\": \"$tag\"}" \
+              "$api/releases" | json_id)
+          fi
+          curl -sf -X POST -H "$auth" -F "attachment=@$ZIP" \
+            "$api/releases/$id/assets?name=$ZIP" > /dev/null
+          echo "Attached $ZIP to release $tag"
