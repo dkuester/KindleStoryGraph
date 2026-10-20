@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::reader::{BookProgress, Status};
 use crate::state::{BookState, State};
-use crate::storygraph::{self, Book, ReadingStatus};
+use crate::storygraph::{self, Book, ReadingStatus, UserBook};
 
 /// Sync tuning knobs (the subset of config relevant to one sync pass).
 #[derive(Debug, Clone, Copy)]
@@ -19,8 +19,9 @@ pub struct SyncConfig {
 /// without live HTTP.
 pub trait StoryGraphClient {
     fn search(&self, query: &str) -> Result<Vec<Book>>;
-    fn set_status(&self, book_id: &str, status_id: u8) -> Result<storygraph::UserBook>;
-    fn set_progress(&self, book_id: &str, percent: u32) -> Result<storygraph::UserBook>;
+    fn user_book(&self, book_id: &str) -> Result<UserBook>;
+    fn set_status(&self, book_id: &str, status_id: u8) -> Result<UserBook>;
+    fn set_progress(&self, book_id: &str, percent: u32) -> Result<UserBook>;
 }
 
 /// The real client, delegating to the `storygraph` module.
@@ -30,10 +31,13 @@ impl StoryGraphClient for RealStoryGraph {
     fn search(&self, query: &str) -> Result<Vec<Book>> {
         storygraph::search(query)
     }
-    fn set_status(&self, book_id: &str, status_id: u8) -> Result<storygraph::UserBook> {
+    fn user_book(&self, book_id: &str) -> Result<UserBook> {
+        storygraph::get_user_book(book_id)
+    }
+    fn set_status(&self, book_id: &str, status_id: u8) -> Result<UserBook> {
         storygraph::update_status(book_id, status_id)
     }
-    fn set_progress(&self, book_id: &str, percent: u32) -> Result<storygraph::UserBook> {
+    fn set_progress(&self, book_id: &str, percent: u32) -> Result<UserBook> {
         storygraph::update_progress(book_id, "percentage", percent)
     }
 }
@@ -59,12 +63,42 @@ pub enum Outcome {
     Finished {
         cde_key: String,
     },
+    /// The Kindle value would move StoryGraph backwards — the book is already
+    /// marked read there, or progress made elsewhere is further along — so
+    /// nothing was pushed.
+    SkippedBehind {
+        cde_key: String,
+        storygraph_id: String,
+        percent: u32,
+        remote_percent: u32,
+        remote_read: bool,
+    },
     NoMatch {
         cde_key: String,
     },
     Unchanged {
         cde_key: String,
     },
+    /// This book failed (network, parse, expired session); the pass went on
+    /// with the remaining books.
+    Failed {
+        cde_key: String,
+        error: String,
+    },
+}
+
+impl Outcome {
+    /// Whether the outcome changed something on StoryGraph or in the state
+    /// (as opposed to a no-op, a skip or a failure).
+    pub fn is_change(&self) -> bool {
+        matches!(
+            self,
+            Outcome::Attached { .. }
+                | Outcome::Mapped { .. }
+                | Outcome::ProgressUpdated { .. }
+                | Outcome::Finished { .. }
+        )
+    }
 }
 
 fn status_id(s: Status) -> u8 {
@@ -90,6 +124,18 @@ fn now_epoch() -> i64 {
 
 fn percent_int(p: f64) -> u32 {
     p.round().clamp(0.0, 100.0) as u32
+}
+
+fn remote_is_read(remote: &UserBook) -> bool {
+    remote.status_id == Some(ReadingStatus::Read as u8)
+}
+
+/// Backward-progress guard: pushing `percent` for a book in progress would
+/// regress StoryGraph when the book is already marked read there (a progress
+/// push would also flip it to "rereading") or when progress made on another
+/// device is further along.
+fn remote_is_ahead(remote: &UserBook, percent: u32) -> bool {
+    remote_is_read(remote) || remote.progress_percent > percent
 }
 
 /// Find the best StoryGraph match for a Kindle book by title, or `None` if no
@@ -118,9 +164,13 @@ fn match_book<SG: StoryGraphClient>(
 /// persisted state and the automatic title search (used for books that can't be
 /// matched automatically).
 ///
-/// With `dry_run` set, matching/search still runs but nothing is written to
-/// StoryGraph and `state` is left untouched — the outcomes show what *would*
-/// happen.
+/// With `dry_run` set, matching/search and the read-only guard lookups still
+/// run but nothing is written to StoryGraph and `state` is left untouched —
+/// the outcomes show what *would* happen.
+///
+/// A failing book is reported as [`Outcome::Failed`] and does not abort the
+/// pass: the books before it keep their state updates (so the caller can save
+/// them) and the books after it are still synced.
 pub fn sync_once<SG: StoryGraphClient>(
     snapshot: &[BookProgress],
     state: &mut State,
@@ -128,111 +178,180 @@ pub fn sync_once<SG: StoryGraphClient>(
     sg: &SG,
     manual_mappings: &HashMap<String, String>,
     dry_run: bool,
-) -> Result<Vec<Outcome>> {
-    let mut outcomes = Vec::new();
-
-    for book in snapshot {
-        // Resolve the StoryGraph id: manual mapping wins, then the persisted
-        // state, then an automatic title search.
-        let mapped = manual_mappings.get(&book.cde_key).cloned();
-        let in_state = state.books.get(&book.cde_key).cloned();
-
-        let resolved: Option<String> = match (&mapped, &in_state) {
-            (Some(id), _) => Some(id.clone()),
-            (None, Some(bs)) => Some(bs.storygraph_id.clone()),
-            (None, None) => match_book(sg, book, config.match_threshold)?,
-        };
-
-        let Some(storygraph_id) = resolved else {
-            outcomes.push(Outcome::NoMatch {
-                cde_key: book.cde_key.clone(),
-            });
-            continue;
-        };
-
-        // Already attached to exactly this id → normal diff handling below.
-        let already_attached = in_state
-            .as_ref()
-            .is_some_and(|bs| bs.storygraph_id == storygraph_id);
-
-        if !already_attached {
-            // First observation, or (re)mapped to a different id → attach.
-            if !dry_run {
-                sg.set_status(&storygraph_id, status_id(book.status))?;
-                if book.status == Status::CurrentlyReading {
-                    sg.set_progress(&storygraph_id, percent_int(book.percent))?;
-                }
-                state.books.insert(
-                    book.cde_key.clone(),
-                    BookState {
-                        storygraph_id: storygraph_id.clone(),
-                        status: status_slug(book.status).to_owned(),
-                        last_percent: book.percent,
-                        last_synced_at: now_epoch(),
-                    },
-                );
-            }
-            let outcome = if mapped.is_some() {
-                Outcome::Mapped {
+) -> Vec<Outcome> {
+    snapshot
+        .iter()
+        .map(|book| {
+            sync_book(book, state, config, sg, manual_mappings, dry_run).unwrap_or_else(|e| {
+                Outcome::Failed {
                     cde_key: book.cde_key.clone(),
-                    storygraph_id,
-                    percent: percent_int(book.percent),
+                    error: format!("{e:#}"),
                 }
-            } else {
-                Outcome::Attached {
-                    cde_key: book.cde_key.clone(),
-                    storygraph_id,
-                    percent: percent_int(book.percent),
-                }
-            };
-            outcomes.push(outcome);
-            continue;
-        }
+            })
+        })
+        .collect()
+}
 
-        // Already attached to this id → diff against the persisted progress.
-        let bs = in_state.expect("already_attached implies a state entry");
-        match book.status {
-            Status::Read if bs.status != "read" => {
+/// Syncs a single book. `state` is only mutated after the StoryGraph writes
+/// for that book succeeded, so an error leaves the book's state untouched and
+/// the next pass retries it.
+fn sync_book<SG: StoryGraphClient>(
+    book: &BookProgress,
+    state: &mut State,
+    config: SyncConfig,
+    sg: &SG,
+    manual_mappings: &HashMap<String, String>,
+    dry_run: bool,
+) -> Result<Outcome> {
+    // Resolve the StoryGraph id: manual mapping wins, then the persisted
+    // state, then an automatic title search.
+    let mapped = manual_mappings.get(&book.cde_key).cloned();
+    let in_state = state.books.get(&book.cde_key).cloned();
+
+    let resolved: Option<String> = match (&mapped, &in_state) {
+        (Some(id), _) => Some(id.clone()),
+        (None, Some(bs)) => Some(bs.storygraph_id.clone()),
+        (None, None) => match_book(sg, book, config.match_threshold)?,
+    };
+
+    let Some(storygraph_id) = resolved else {
+        return Ok(Outcome::NoMatch {
+            cde_key: book.cde_key.clone(),
+        });
+    };
+    let pct = percent_int(book.percent);
+
+    // Already attached to exactly this id → normal diff handling below.
+    let already_attached = in_state
+        .as_ref()
+        .is_some_and(|bs| bs.storygraph_id == storygraph_id);
+
+    if !already_attached {
+        // First observation, or (re)mapped to a different id → attach. A book
+        // in progress must not demote a book that is already read on
+        // StoryGraph, nor rewind progress made on another device.
+        if book.status == Status::CurrentlyReading {
+            let remote = sg.user_book(&storygraph_id)?;
+            if remote_is_ahead(&remote, pct) {
                 if !dry_run {
-                    sg.set_status(&bs.storygraph_id, ReadingStatus::Read as u8)?;
-                    sg.set_progress(&bs.storygraph_id, percent_int(book.percent))?;
-                    if let Some(b) = state.books.get_mut(&book.cde_key) {
-                        b.status = "read".to_owned();
-                        b.last_percent = book.percent;
-                        b.last_synced_at = now_epoch();
-                    }
+                    // Remember the link (no re-search next pass) and mirror
+                    // the remote status so the diff below stays consistent.
+                    let status = if remote_is_read(&remote) {
+                        "read"
+                    } else {
+                        "currently-reading"
+                    };
+                    state.books.insert(
+                        book.cde_key.clone(),
+                        BookState {
+                            storygraph_id: storygraph_id.clone(),
+                            status: status.to_owned(),
+                            last_percent: book.percent,
+                            last_synced_at: now_epoch(),
+                        },
+                    );
                 }
-                outcomes.push(Outcome::Finished {
-                    cde_key: book.cde_key.clone(),
-                });
+                return Ok(skipped_behind(book, storygraph_id, pct, &remote));
             }
-            Status::CurrentlyReading => {
-                if (book.percent - bs.last_percent).abs() >= config.progress_step {
-                    let pct = percent_int(book.percent);
-                    if !dry_run {
-                        sg.set_progress(&bs.storygraph_id, pct)?;
-                        if let Some(b) = state.books.get_mut(&book.cde_key) {
-                            b.last_percent = book.percent;
-                            b.last_synced_at = now_epoch();
-                        }
-                    }
-                    outcomes.push(Outcome::ProgressUpdated {
-                        cde_key: book.cde_key.clone(),
-                        percent: pct,
-                    });
-                } else {
-                    outcomes.push(Outcome::Unchanged {
-                        cde_key: book.cde_key.clone(),
-                    });
-                }
-            }
-            Status::Read => outcomes.push(Outcome::Unchanged {
-                cde_key: book.cde_key.clone(),
-            }),
         }
+
+        if !dry_run {
+            sg.set_status(&storygraph_id, status_id(book.status))?;
+            if book.status == Status::CurrentlyReading {
+                sg.set_progress(&storygraph_id, pct)?;
+            }
+            state.books.insert(
+                book.cde_key.clone(),
+                BookState {
+                    storygraph_id: storygraph_id.clone(),
+                    status: status_slug(book.status).to_owned(),
+                    last_percent: book.percent,
+                    last_synced_at: now_epoch(),
+                },
+            );
+        }
+        return Ok(if mapped.is_some() {
+            Outcome::Mapped {
+                cde_key: book.cde_key.clone(),
+                storygraph_id,
+                percent: pct,
+            }
+        } else {
+            Outcome::Attached {
+                cde_key: book.cde_key.clone(),
+                storygraph_id,
+                percent: pct,
+            }
+        });
     }
 
-    Ok(outcomes)
+    // Already attached to this id → diff against the persisted progress.
+    let bs = in_state.expect("already_attached implies a state entry");
+    let unchanged = Outcome::Unchanged {
+        cde_key: book.cde_key.clone(),
+    };
+    match book.status {
+        Status::Read if bs.status != "read" => {
+            if !dry_run {
+                // Status only: a progress push on a book that is already read
+                // makes StoryGraph's update-progress flow flip it to
+                // "rereading".
+                sg.set_status(&bs.storygraph_id, ReadingStatus::Read as u8)?;
+                if let Some(b) = state.books.get_mut(&book.cde_key) {
+                    b.status = "read".to_owned();
+                    b.last_percent = book.percent;
+                    b.last_synced_at = now_epoch();
+                }
+            }
+            Ok(Outcome::Finished {
+                cde_key: book.cde_key.clone(),
+            })
+        }
+        Status::Read => Ok(unchanged),
+        Status::CurrentlyReading => {
+            if (book.percent - bs.last_percent).abs() < config.progress_step {
+                return Ok(unchanged);
+            }
+            let remote = sg.user_book(&bs.storygraph_id)?;
+            if remote_is_ahead(&remote, pct) {
+                if !dry_run && let Some(b) = state.books.get_mut(&book.cde_key) {
+                    // Track the Kindle value so the guard lookup only repeats
+                    // once the Kindle moves by another progress step.
+                    b.last_percent = book.percent;
+                    if remote_is_read(&remote) {
+                        b.status = "read".to_owned();
+                    }
+                }
+                return Ok(skipped_behind(book, bs.storygraph_id.clone(), pct, &remote));
+            }
+            if !dry_run {
+                sg.set_progress(&bs.storygraph_id, pct)?;
+                if let Some(b) = state.books.get_mut(&book.cde_key) {
+                    b.last_percent = book.percent;
+                    b.last_synced_at = now_epoch();
+                }
+            }
+            Ok(Outcome::ProgressUpdated {
+                cde_key: book.cde_key.clone(),
+                percent: pct,
+            })
+        }
+    }
+}
+
+fn skipped_behind(
+    book: &BookProgress,
+    storygraph_id: String,
+    percent: u32,
+    remote: &UserBook,
+) -> Outcome {
+    Outcome::SkippedBehind {
+        cde_key: book.cde_key.clone(),
+        storygraph_id,
+        percent,
+        remote_percent: remote.progress_percent,
+        remote_read: remote_is_read(remote),
+    }
 }
 
 #[cfg(test)]
@@ -243,15 +362,44 @@ mod tests {
 
     struct Mock {
         results: HashMap<String, Vec<Book>>,
+        /// StoryGraph-side `(status_id, progress_percent)` per book id; a
+        /// missing entry is a book not on the user's shelf yet.
+        remote: HashMap<String, (Option<u8>, u32)>,
+        /// Book ids whose writes fail (simulated network/parse error).
+        failing: Vec<String>,
         status_calls: RefCell<Vec<(String, u8)>>,
         progress_calls: RefCell<Vec<(String, u32)>>,
+    }
+
+    impl Mock {
+        fn fail_if_failing(&self, book_id: &str) -> Result<()> {
+            if self.failing.iter().any(|f| f == book_id) {
+                anyhow::bail!("simulated failure for {book_id}");
+            }
+            Ok(())
+        }
     }
 
     impl StoryGraphClient for Mock {
         fn search(&self, query: &str) -> Result<Vec<Book>> {
             Ok(self.results.get(query).cloned().unwrap_or_default())
         }
+        fn user_book(&self, book_id: &str) -> Result<storygraph::UserBook> {
+            self.fail_if_failing(book_id)?;
+            let (status_id, progress_percent) =
+                self.remote.get(book_id).copied().unwrap_or((None, 0));
+            Ok(storygraph::UserBook {
+                book_id: book_id.to_owned(),
+                status_id,
+                progress_percent,
+                progress_pages: 0,
+                book_pages: 0,
+                progress_type: "percentage".to_owned(),
+                edition_format: String::new(),
+            })
+        }
         fn set_status(&self, book_id: &str, status_id: u8) -> Result<storygraph::UserBook> {
+            self.fail_if_failing(book_id)?;
             self.status_calls
                 .borrow_mut()
                 .push((book_id.to_owned(), status_id));
@@ -266,6 +414,7 @@ mod tests {
             })
         }
         fn set_progress(&self, book_id: &str, percent: u32) -> Result<storygraph::UserBook> {
+            self.fail_if_failing(book_id)?;
             self.progress_calls
                 .borrow_mut()
                 .push((book_id.to_owned(), percent));
@@ -306,6 +455,8 @@ mod tests {
         );
         Mock {
             results,
+            remote: HashMap::new(),
+            failing: vec![],
             status_calls: RefCell::new(vec![]),
             progress_calls: RefCell::new(vec![]),
         }
@@ -327,8 +478,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes =
-            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
 
         assert_eq!(
             outcomes,
@@ -364,8 +514,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes =
-            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
 
         assert_eq!(
             outcomes,
@@ -396,8 +545,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes =
-            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
 
         assert_eq!(
             outcomes,
@@ -425,8 +573,7 @@ mod tests {
         let mock = mock_with("The Great Gatsby", "sg-1");
         let snapshot = vec![book("asin1", "The Great Gatsby", 99.9, Status::Read)];
 
-        let outcomes =
-            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
 
         assert_eq!(
             outcomes,
@@ -435,10 +582,8 @@ mod tests {
             }]
         );
         assert_eq!(*mock.status_calls.borrow(), vec![("sg-1".to_owned(), 3)]);
-        assert_eq!(
-            *mock.progress_calls.borrow(),
-            vec![("sg-1".to_owned(), 100)]
-        );
+        // No progress push: on a read book it would flip it to "rereading".
+        assert!(mock.progress_calls.borrow().is_empty());
         assert_eq!(state.books["asin1"].status, "read");
     }
 
@@ -453,8 +598,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes =
-            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
 
         assert_eq!(
             outcomes,
@@ -476,7 +620,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), true).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), true);
 
         assert_eq!(
             outcomes,
@@ -506,7 +650,7 @@ mod tests {
         let mut mappings = HashMap::new();
         mappings.insert("asin1".to_owned(), "sg-manual".to_owned());
 
-        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &mappings, false).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &mappings, false);
 
         assert_eq!(
             outcomes,
@@ -551,6 +695,8 @@ mod tests {
         );
         let mock = Mock {
             results,
+            remote: HashMap::new(),
+            failing: vec![],
             status_calls: RefCell::new(vec![]),
             progress_calls: RefCell::new(vec![]),
         };
@@ -561,8 +707,7 @@ mod tests {
             Status::CurrentlyReading,
         )];
 
-        let outcomes =
-            sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
 
         assert_eq!(
             outcomes,
@@ -572,5 +717,207 @@ mod tests {
                 percent: 23,
             }]
         );
+    }
+
+    fn attached(id: &str, status: &str, last_percent: f64) -> BookState {
+        BookState {
+            storygraph_id: id.to_owned(),
+            status: status.to_owned(),
+            last_percent,
+            last_synced_at: 0,
+        }
+    }
+
+    #[test]
+    fn progress_behind_storygraph_is_not_pushed() {
+        // Read to 70 % on another device; the Kindle moved from 40 to 45 %.
+        let mut state = State::default();
+        state.books.insert(
+            "asin1".to_owned(),
+            attached("sg-1", "currently-reading", 40.0),
+        );
+        let mut mock = mock_with("The Great Gatsby", "sg-1");
+        mock.remote.insert("sg-1".to_owned(), (Some(2), 70));
+        let snapshot = vec![book(
+            "asin1",
+            "The Great Gatsby",
+            45.0,
+            Status::CurrentlyReading,
+        )];
+
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
+
+        assert_eq!(
+            outcomes,
+            vec![Outcome::SkippedBehind {
+                cde_key: "asin1".to_owned(),
+                storygraph_id: "sg-1".to_owned(),
+                percent: 45,
+                remote_percent: 70,
+                remote_read: false,
+            }]
+        );
+        assert!(mock.progress_calls.borrow().is_empty());
+        assert!(mock.status_calls.borrow().is_empty());
+        // The Kindle value is tracked, so the guard lookup isn't repeated
+        // until the Kindle moves another step.
+        assert_eq!(state.books["asin1"].last_percent, 45.0);
+    }
+
+    #[test]
+    fn progress_ahead_of_storygraph_is_pushed() {
+        let mut state = State::default();
+        state.books.insert(
+            "asin1".to_owned(),
+            attached("sg-1", "currently-reading", 40.0),
+        );
+        let mut mock = mock_with("The Great Gatsby", "sg-1");
+        mock.remote.insert("sg-1".to_owned(), (Some(2), 40));
+        let snapshot = vec![book(
+            "asin1",
+            "The Great Gatsby",
+            45.0,
+            Status::CurrentlyReading,
+        )];
+
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
+
+        assert_eq!(
+            outcomes,
+            vec![Outcome::ProgressUpdated {
+                cde_key: "asin1".to_owned(),
+                percent: 45,
+            }]
+        );
+        assert_eq!(*mock.progress_calls.borrow(), vec![("sg-1".to_owned(), 45)]);
+    }
+
+    #[test]
+    fn reopened_read_book_is_not_flipped_to_rereading() {
+        // Finished and synced as read; reopening at the start drops the
+        // Kindle percent. A progress push would make StoryGraph "rereading".
+        let mut state = State::default();
+        state
+            .books
+            .insert("asin1".to_owned(), attached("sg-1", "read", 100.0));
+        let mut mock = mock_with("The Great Gatsby", "sg-1");
+        mock.remote.insert("sg-1".to_owned(), (Some(3), 0));
+        let snapshot = vec![book(
+            "asin1",
+            "The Great Gatsby",
+            3.0,
+            Status::CurrentlyReading,
+        )];
+
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
+
+        assert!(matches!(
+            outcomes.as_slice(),
+            [Outcome::SkippedBehind {
+                remote_read: true,
+                ..
+            }]
+        ));
+        assert!(mock.progress_calls.borrow().is_empty());
+        assert!(mock.status_calls.borrow().is_empty());
+        assert_eq!(state.books["asin1"].status, "read");
+    }
+
+    #[test]
+    fn attach_does_not_demote_a_book_read_on_storygraph() {
+        let mut state = State::default();
+        let mut mock = mock_with("The Great Gatsby", "sg-1");
+        mock.remote.insert("sg-1".to_owned(), (Some(3), 0));
+        let snapshot = vec![book(
+            "asin1",
+            "The Great Gatsby",
+            30.0,
+            Status::CurrentlyReading,
+        )];
+
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
+
+        assert_eq!(
+            outcomes,
+            vec![Outcome::SkippedBehind {
+                cde_key: "asin1".to_owned(),
+                storygraph_id: "sg-1".to_owned(),
+                percent: 30,
+                remote_percent: 0,
+                remote_read: true,
+            }]
+        );
+        assert!(mock.status_calls.borrow().is_empty());
+        assert!(mock.progress_calls.borrow().is_empty());
+        // The link is remembered (no re-search next pass) with the remote
+        // status mirrored.
+        assert_eq!(state.books["asin1"].storygraph_id, "sg-1");
+        assert_eq!(state.books["asin1"].status, "read");
+    }
+
+    #[test]
+    fn dry_run_guard_does_not_touch_state() {
+        let mut state = State::default();
+        let mut mock = mock_with("The Great Gatsby", "sg-1");
+        mock.remote.insert("sg-1".to_owned(), (Some(2), 80));
+        let snapshot = vec![book(
+            "asin1",
+            "The Great Gatsby",
+            30.0,
+            Status::CurrentlyReading,
+        )];
+
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), true);
+
+        assert!(matches!(
+            outcomes.as_slice(),
+            [Outcome::SkippedBehind {
+                remote_percent: 80,
+                ..
+            }]
+        ));
+        assert!(state.books.is_empty());
+    }
+
+    #[test]
+    fn failing_book_does_not_abort_the_pass() {
+        let mut state = State::default();
+        let mut results = HashMap::new();
+        for (title, id) in [("Book One", "sg-1"), ("Book Two", "sg-2")] {
+            results.insert(
+                title.to_owned(),
+                vec![Book {
+                    id: id.to_owned(),
+                    title: title.to_owned(),
+                    author: "Author".to_owned(),
+                    pages: 0,
+                }],
+            );
+        }
+        let mock = Mock {
+            results,
+            remote: HashMap::new(),
+            failing: vec!["sg-1".to_owned()],
+            status_calls: RefCell::new(vec![]),
+            progress_calls: RefCell::new(vec![]),
+        };
+        let snapshot = vec![
+            book("asin1", "Book One", 10.0, Status::CurrentlyReading),
+            book("asin2", "Book Two", 20.0, Status::CurrentlyReading),
+        ];
+
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &HashMap::new(), false);
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(
+            matches!(&outcomes[0], Outcome::Failed { cde_key, error }
+                if cde_key == "asin1" && error.contains("simulated failure")),
+            "unexpected: {:?}",
+            outcomes[0]
+        );
+        assert!(matches!(&outcomes[1], Outcome::Attached { cde_key, .. } if cde_key == "asin2"));
+        // The failed book has no state (retried next pass); the other one does.
+        assert!(!state.books.contains_key("asin1"));
+        assert_eq!(state.books["asin2"].storygraph_id, "sg-2");
     }
 }

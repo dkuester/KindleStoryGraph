@@ -263,6 +263,16 @@ fn run(cmd: Command) -> anyhow::Result<()> {
             let state = PathBuf::from(s.state.unwrap_or_else(|| CONFIG.state_path.clone()));
             let outcomes = daemon::sync_once_from_paths(&cc_db, &state, s.dry_run)?;
             print_json(&outcomes);
+            let failed = outcomes
+                .iter()
+                .filter(|o| matches!(o, kindlestorygraph::sync::Outcome::Failed { .. }))
+                .count();
+            if failed > 0 {
+                return Err(UserError(format!(
+                    "{failed} book(s) failed to sync (see \"failed\" entries above); the others were synced."
+                ))
+                .into());
+            }
         }
         Command::Daemon(d) => {
             let interval = d.interval.unwrap_or(CONFIG.poll_interval);

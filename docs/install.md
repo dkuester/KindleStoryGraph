@@ -107,6 +107,12 @@ sync_scope=all
 
 Then all books with progress are synced and the selection is ignored.
 
+Progress never goes backwards on StoryGraph: before each push the current
+StoryGraph value is read, and the push is skipped (`skipped_behind` in the log)
+when the book is already marked read there or progress made on another device
+is further along. A book that failed to sync (network, expired cookies) is
+logged as `failed` and retried on the next pass; the other books still sync.
+
 ## 7. Linking books to StoryGraph
 
 Books whose title can't be matched automatically are skipped as `no_match` in

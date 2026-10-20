@@ -44,16 +44,19 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   candidate list → tap writes manual_mappings.ini and regenerates the KUAL
   menu). The search shows a "Suchen…" status with cancel; timeout, no-network,
   expired-cookies and no-results are surfaced explicitly.
+- Backward-progress guard: before a progress push (and before attaching a book
+  in progress) the current StoryGraph value is read; the push is skipped
+  (`skipped_behind`) when the book is already read there or the remote percent
+  is ahead. This also covers the status: a book read on StoryGraph is never
+  demoted to "currently-reading".
+- Fixed: finishing a book no longer flips it to "rereading" on StoryGraph (the
+  finish path pushed 100 % after setting "read", and StoryGraph's
+  update-progress flow turns a progress update on a read book into a reread).
+- Per-book error isolation: a failing book is reported as `failed` and the pass
+  continues; the state of the books synced before it is saved instead of being
+  re-pushed on every pass. `sync` exits non-zero when any book failed.
 
 ## Quick wins
-
-- **Backward-progress guard** *(high value)*
-  Before pushing a progress update, read the current StoryGraph value and skip
-  the push when the Kindle value is lower — so progress made on another device
-  never regresses ("StoryGraph runs backward"). Thin first cut: compare percent
-  only; deeper follow-up: also guard the status (don't demote "read" back to
-  "currently-reading"). Effort: small. Mapping: `get_user_book` is already in
-  the client (`userbook` command).
 
 - **Filter non-book entries (PDOC/dummy)**
   Exclude `p_cdeType != "EBOK"` entries (e.g. the JAILBROKEN placeholder) from

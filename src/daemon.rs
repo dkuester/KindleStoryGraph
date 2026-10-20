@@ -51,7 +51,7 @@ pub fn sync_once_from_paths(
         match_threshold: CONFIG.match_threshold,
     };
     let mappings = load_manual_mappings(Path::new(&CONFIG.manual_mappings_path));
-    let outcomes = sync::sync_once(&snapshot, &mut state, cfg, &sg, &mappings, dry_run)?;
+    let outcomes = sync::sync_once(&snapshot, &mut state, cfg, &sg, &mappings, dry_run);
     if !dry_run {
         state.save(state_path)?;
     }
