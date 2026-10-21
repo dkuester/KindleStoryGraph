@@ -159,16 +159,18 @@ match.
 The allowlist only stops *future* syncs; a book that was already synced stays
 on your StoryGraph shelf. To take it back off:
 
-1. In KUAL Next → KindleStoryGraph, open **Remove from StoryGraph**. It lists
-   every book this tool has synced (the group is hidden when there are none,
-   and with `sync_scope=all`).
-2. Tap the book. It needs Wi-Fi and valid cookies. The menu stays open and the
-   book drops out of the list.
+1. In KUAL Next → KindleStoryGraph, tap **Remove from StoryGraph... (N)**. It
+   opens the on-device settings UI directly on the list of every book this
+   tool has synced (the entry is hidden when there are none, and with
+   `sync_scope=all`). Inside the settings UI the same list is **Link** →
+   **Remove**.
+2. Tap the book, then confirm with **Remove** (or **Cancel**). It needs Wi-Fi
+   and valid cookies. The call runs in the background; **Back** leaves it
+   running and the result shows up as a note.
 
-In the on-device settings UI (**Open settings UI**) the same is **Link** →
-**Remove**: tap a synced book, then confirm with **Remove**. The call runs in
-the background; **Back** leaves it running and the result shows up as a note.
-On a host or over SSH the same is `kindlestorygraph unsync <cde_key>`.
+Removing only happens in the settings UI because a KUAL tap runs its action
+immediately, with no way to ask for confirmation or show the result. On a host
+or over SSH the same is `kindlestorygraph unsync <cde_key>`.
 
 What happens: the book is set to **to-read** on StoryGraph, then removed from
 `allowlist.ini` (so the next sync doesn't put it back) and from `state.json`.
@@ -194,10 +196,8 @@ any review you wrote**. This cannot be undone. Your tags on the book are kept.
 Locally it does the same as above (allowlist and `state.json`; the manual
 mapping is kept).
 
-- KUAL: **Remove completely (N) - deletes history + review** → tap the book →
-  tap **Yes, delete history + review**. The second tap is the confirmation.
-- Settings UI: **Link** → **Remove** → book → **Remove completely...** → a
-  second warning screen → **Delete**.
+- Settings UI (also via KUAL **Remove from StoryGraph...**): book →
+  **Remove completely...** → a second warning screen → **Delete**.
 - CLI: `kindlestorygraph unsync --completely <cde_key>`.
 
 ## Notes & limitations

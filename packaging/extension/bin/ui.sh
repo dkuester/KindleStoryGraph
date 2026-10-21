@@ -1,6 +1,8 @@
 #!/bin/sh
 # KindleStoryGraph — open the on-device settings UI (FBInk, framebuffer).
 # Runs as the launcher process (root) so it can read /var/local/cc.db.
+# KUAL `params` are passed through, e.g. "--remove" to open the
+# "Remove from StoryGraph" list directly.
 EXT="/mnt/us/extensions/kindlestorygraph"
 export KINDLE_STORYGRAPH_CONFIG="$EXT/config.ini"
 
@@ -9,4 +11,4 @@ if [ ! -f "$KINDLE_STORYGRAPH_CONFIG" ] && [ -f "$EXT/config_example.ini" ]; the
     cp "$EXT/config_example.ini" "$KINDLE_STORYGRAPH_CONFIG"
 fi
 
-exec "$EXT/bin/kindlestorygraph" ui
+exec "$EXT/bin/kindlestorygraph" ui "$@"
