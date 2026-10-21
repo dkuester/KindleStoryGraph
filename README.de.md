@@ -1,115 +1,142 @@
+<div align="center">
+
 # KindleStoryGraph
 
-StoryGraph-Synchronisierung für den nativen Kindle-Reader — das Kindle-Pendant
-zu [NickelStoryGraph](https://github.com/dkuester/NickelStorygraph)
-(Kobo/Tolino).
+**Lesefortschritt aus dem Kindle-eigenen Reader mit The StoryGraph synchronisieren. Ohne KOReader.**
 
-Synchronisiert Lesefortschritt und Lesestatus (wird gelesen / gelesen) von
-einem gejailbreakten Kindle zu [The StoryGraph](https://thestorygraph.com),
-ohne die Reader-App zu wechseln.
+[![Release](https://img.shields.io/github/v/release/dkuester/KindleStoryGraph?label=release)](https://github.com/dkuester/KindleStoryGraph/releases/latest)
+[![CI](https://github.com/dkuester/KindleStoryGraph/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dkuester/KindleStoryGraph/actions/workflows/ci.yml)
+[![Kindle](https://img.shields.io/badge/Kindle-jailbroken%2C%20FW%205.17%2B-informational)](#voraussetzungen)
+[![Lizenz](https://img.shields.io/github/license/dkuester/KindleStoryGraph)](LICENSE)
 
-> **Status:** Phase 1–4 abgeschlossen. Reader, StoryGraph-Client, Sync-Engine,
-> KUAL-Paketierung und Cross-Compile-Tooling sind fertig und der Sync ist auf dem
-> Gerät verifiziert. Dazu: Opt-in-Allowlist-Sync, Mindestfortschritts-Schwelle,
-> manuelle Titel-Zuordnung und ein rein manueller Modus. Siehe
-> [docs/architecture.md](docs/architecture.md).
+[Installation](docs/install.de.md) · [Funktionen](#funktionen) · [Funktionsweise](#funktionsweise) · [Bauen](#bauen) · [Architektur](docs/architecture.md) · [Releases](https://github.com/dkuester/KindleStoryGraph/releases) · [English](README.md)
 
-*[English version](README.md)*
+</div>
 
-## Funktionsweise
+KindleStoryGraph überträgt Lesefortschritt und Lesestatus (lese ich gerade /
+gelesen) von einem gejailbreakten Kindle zu [The StoryGraph](https://thestorygraph.com),
+während du weiter im nativen Kindle-Reader liest. Es ist das Gegenstück zu
+[NickelStorygraph](https://github.com/dkuester/NickelStorygraph) für Kobo und
+tolino und nutzt dieselbe Logik für StoryGraph-Login, Buchzuordnung und Sync.
 
-Anders als beim Kobo lässt sich der Kindle-Reader nicht prozessintern hooken.
-KindleStoryGraph liest den Kindle-Inhaltskatalog (`cc.db`), ermittelt den
-Lesefortschritt und überträgt ihn über dieselbe HTTP-Schicht zu StoryGraph, die
-NickelStoryGraph nutzt.
+> [!NOTE]
+> **Stand:** Reader, StoryGraph-Client, Sync-Engine, KUAL-Paket und
+> Cross-Compile-Werkzeuge sind fertig, der Sync ist auf dem Gerät geprüft
+> (Kindle Basic 2024, Firmware 5.20.1). Weitere Pläne stehen in [ROADMAP.md](ROADMAP.md).
 
-Zwei Betriebsarten:
-
-- **Manuell** — „Sync now" im KUAL-Menü führt einen einzelnen Durchlauf aus und
-  beendet sich; im Hintergrund läuft nichts.
-- **Daemon** — „Start sync daemon" pollt `cc.db` alle 15 Minuten und überträgt
-  Änderungen automatisch.
-
-- Nur der native Reader — kein KOReader nötig.
-- Read-only: fasst weder `cc.db` noch die Bücher an.
-- Sparsames Polling, Wi-Fi-abhängig, suspend-bewusst.
+---
 
 ## Funktionen
 
-- **Opt-in-Allowlist** (Standard): Im KUAL-Menü wählst du, welche Bücher syncen;
-  `sync_scope=all` in `config.ini` synchronisiert stattdessen alle Bücher.
-- **Mindestfortschritts-Schwelle**: Bücher unter 2 % (der Sprung beim ersten
-  Öffnen) werden ignoriert, bis du wirklich liest.
-- **Manuelle Zuordnung**: `cde_key → StoryGraph-ID` für Titel, die die Suche
-  nicht zuordnen kann — entweder aus dem KUAL-Menü („Find matches" → „Link
-  books") oder per Bearbeiten der `manual_mappings.ini`.
-- **Link-Status im Menü**: Bereits mit StoryGraph verknüpfte Bücher zeigen in
-  „Sync selection" den Marker `[linked]`.
-- **Diff-basierter Sync**: Nur Fortschritts-*Änderungen* werden übertragen,
-  pro Buch gedrosselt — nie ein Voll-Upload der Bibliothek.
+| Funktion | Beschreibung |
+|---|---|
+| **Nativer Reader** | Liest den Fortschritt aus dem Inhaltskatalog des Kindle (`cc.db`). Kein KOReader, keine andere Lese-App. |
+| **Manuell oder automatisch** | „Sync now“ im KUAL-Menü synchronisiert einmal. „Start sync daemon“ prüft alle 15 Minuten und überträgt Änderungen. |
+| **Bücher selbst auswählen** | Standardmäßig per Allowlist: Die zu synchronisierenden Bücher wählst du im KUAL-Menü. `sync_scope=all` synchronisiert stattdessen alle. |
+| **Kein versehentlicher Start** | Bücher unter 2 % Fortschritt (der Sprung beim ersten Öffnen) werden ignoriert, bis du wirklich zu lesen beginnst. |
+| **Manuelle Zuordnung** | Ein Kindle-Buch einer StoryGraph-Ausgabe zuordnen, im KUAL-Menü („Find matches“ → „Link books“) oder in `manual_mappings.ini`. Verknüpfte Bücher tragen `[linked]`. |
+| **Schonend fürs Gerät** | Nur *Änderungen* am Fortschritt werden übertragen, gedrosselt pro Buch. Seltene Abfragen, nur mit WLAN, Standby wird respektiert. |
+| **Nur lesend** | Schreibt nie in `cc.db` oder in deine Bücher. |
 
 ## Voraussetzungen
 
-- Ein gejailbreakter Kindle (z. B. [Véra](https://kindlemodding.org/jailbreaking/Vera/)).
-- Firmware ca. 5.17+ (entwickelt und getestet auf 5.20.1, Kindle Basic 2024).
+| | |
+|---|---|
+| Gerät | Ein **gejailbreakter** Kindle, z. B. per [Véra](https://kindlemodding.org/jailbreaking/Vera/) ([Anleitung](docs/jailbreak.de.md)) |
+| Firmware | etwa 5.17 oder neuer (entwickelt und getestet mit 5.20.1, Kindle Basic 2024) |
+| Launcher | KUAL Next oder KUALA |
+| Konto | Ein StoryGraph-Konto und WLAN auf dem Kindle |
 
 ## Installation
 
-Die vollständige Anleitung steht in [docs/install.de.md](docs/install.de.md);
-die Jailbreak-Voraussetzung in [docs/jailbreak.de.md](docs/jailbreak.de.md).
+> [!IMPORTANT]
+> StoryGraph hat keine öffentliche API. KindleStoryGraph meldet sich mit zwei
+> Session-Cookies aus deinem Browser an. Behandle sie wie Passwörter.
+
+1. `kindlestorygraph-<version>-kual.zip` aus dem [neuesten Release](https://github.com/dkuester/KindleStoryGraph/releases/latest) herunterladen.
+2. Den Kindle per USB verbinden, den Ordner `extensions/kindlestorygraph/`
+   anlegen und den Inhalt der ZIP dorthin entpacken.
+3. `config_example.ini` nach `config.ini` kopieren und `session_cookie` sowie
+   `remember_user_token` eintragen.
+4. In KUAL: **KindleStoryGraph → Sync now** oder **Start sync daemon**.
+
+Die vollständige Anleitung, auch zum Auslesen der Cookies und zu allen
+Einstellungen, steht in [docs/install.de.md](docs/install.de.md).
+
+## Funktionsweise
+
+Anders als bei Kobo lässt sich der Kindle-Reader nicht im laufenden Prozess
+hooken. KindleStoryGraph ist ein kleines statisches Programm, das den
+Inhaltskatalog des Kindle (`cc.db`) liest, Fortschritt und Lesestatus
+ausliest, jedes Buch einer StoryGraph-Ausgabe zuordnet und Änderungen über
+dieselbe HTTP-Schicht wie NickelStorygraph überträgt. Details stehen
+(englisch) in [docs/architecture.md](docs/architecture.md).
 
 ## Bauen
 
-Das statische armhf-(musl-)Binary cross-kompilieren und die KUAL-Erweiterung
-zusammenbauen (Docker nötig):
+Das statische armhf-Programm (musl) cross-kompilieren und die KUAL-Erweiterung
+zusammenstellen (Docker und [just](https://just.systems) nötig):
 
-    just build && just package
+```bash
+git clone https://github.com/dkuester/KindleStoryGraph.git
+cd KindleStoryGraph
+just build && just package
+```
 
-Die Erweiterung entsteht in `packaging/extension/`; den Ordner nach
-`/mnt/us/extensions/kindlestorygraph` auf dem Kindle kopieren. Getaggte
-`v*`-Releases bauen per CI ein Zip (`.forgejo/workflows/release.yml`).
+Die Erweiterung entsteht in `packaging/extension/`. Für die Entwicklung auf
+dem Rechner: `just lint` (fmt, clippy und die Tests).
 
-## Projektstatus
+Die CI führt fmt, clippy und die Tests bei jedem Push auf `main` und jedem
+Pull-Request aus. Jeder Tag `v*` baut die KUAL-ZIP in der CI und hängt sie an
+das Release.
 
-Phase 1–4 abgeschlossen, der Sync ist auf dem Gerät verifiziert. Der
-vollständige Plan samt Umsetzungsphasen steht in
-[docs/architecture.md](docs/architecture.md). Künftige Arbeit ist in
-[ROADMAP.md](ROADMAP.md) festgehalten.
+## Support
 
-## Danksagung / Credits
+| | |
+|---|---|
+| Fehlermeldungen und Fragen | [Issues](https://github.com/dkuester/KindleStoryGraph/issues). Bitte Kindle-Modell, Firmware-Version und den passenden Ausschnitt aus `kindlestorygraph.log` angeben. **Cookies vorher aus Logs und Konfiguration entfernen.** |
+| Downloads | [Releases](https://github.com/dkuester/KindleStoryGraph/releases) |
+| Geplante Funktionen | [ROADMAP.md](ROADMAP.md) |
+| Frühere Historie | Pull-Requests bis v0.1.0 liegen im [archivierten Codeberg-Repo](https://codeberg.org/hortizept/KindleStoryGraph). |
+| Mitwirken | Pull-Requests gegen `main`; die CI muss grün sein. |
 
-Dieses Projekt baut auf vorangegangener Reverse-Engineering- und
-Community-Arbeit auf:
+> [!WARNING]
+> Ein Jailbreak kann die Garantie kosten. KindleStoryGraph steht in keiner
+> Verbindung zu Amazon oder The StoryGraph. Nutzung auf eigene Gefahr.
 
-- [NickelStoryGraph](https://github.com/VictoriaKerr131/NickelStorygraph) von
-  VictoriaKerr131 (Fork: [dkuester/NickelStorygraph](https://github.com/dkuester/NickelStorygraph)) —
-  das Kobo/Tolino-Plugin, dessen StoryGraph-Login, Buch-Matching und
-  Sync-Logik hier übernommen werden.
-- [zevisvei/kindle-reading-dashboard](https://github.com/zevisvei/kindle-reading-dashboard) —
-  hat das `cc.db`-Schema (`p_percentFinished`, `p_readState`, …) und die moderne
-  Lesestatus-Ablage reverse-engineered und dokumentiert, die dieses Projekt liest.
-- [kaikozlov/kindle.koplugin](https://github.com/kaikozlov/kindle.koplugin) —
-  Präzedenzfall für das Lesen des Kindle-Inhaltskatalogs aus On-Device-Code.
-- [KindleModding](https://kindlemodding.org/) — Véra-Jailbreak, Hotfix, KUAL
+## Danksagung
+
+Dieses Projekt baut auf Reverse Engineering und Arbeit aus der Community auf:
+
+- [NickelStorygraph](https://github.com/VictoriaKerr131/NickelStorygraph) von
+  VictoriaKerr131 (Fork: [dkuester/NickelStorygraph](https://github.com/dkuester/NickelStorygraph)):
+  das Kobo/tolino-Plugin, dessen StoryGraph-Login, Buchzuordnung und
+  Sync-Logik hier portiert sind.
+- [zevisvei/kindle-reading-dashboard](https://github.com/zevisvei/kindle-reading-dashboard):
+  hat das Schema von `cc.db` (`p_percentFinished`, `p_readState`, …) und die
+  neuere Speicherung des Lesestatus erschlossen und dokumentiert.
+- [kaikozlov/kindle.koplugin](https://github.com/kaikozlov/kindle.koplugin):
+  Vorbild für das Lesen des Inhaltskatalogs aus Code auf dem Gerät.
+- [KindleModding](https://kindlemodding.org/): Véra-Jailbreak, Hotfix, KUAL
   Next, MRPI und KPM, die Infrastruktur, auf der dieses Projekt aufsetzt.
 - Das [KindleModding-Wiki](https://kindlemodding.org/kindle-hacking/) und die
-  [MobileRead-Foren](https://www.mobileread.com/forums/) — Dokumentation der
+  [MobileRead-Foren](https://www.mobileread.com/forums/): Dokumentation der
   Kindle-Interna.
 - [KRDS](https://www.mobileread.com/forums/showthread.php?t=322172) von j.p.s /
-  tomsem — Parser für die `.sdr`-Sidecar-Dateien (referenziert; genutzt, falls
-  feinere Positionsdaten benötigt werden).
-- [burneracc0112/storygraph.koplugin](https://github.com/burneracc0112/storygraph.koplugin) —
+  tomsem: Parser für die `.sdr`-Begleitdateien (referenziert; genutzt, falls
+  feinere Positionsdaten nötig werden).
+- [burneracc0112/storygraph.koplugin](https://github.com/burneracc0112/storygraph.koplugin):
   Referenz für StoryGraph-Sync-Muster (KOReader).
-- [sighery.com — Transferring books and progress between Kindles](https://sighery.com/posts/transferring-content-between-kindles/) —
-  Dokumentation von `cc.db` / `Entries`.
+- [sighery.com: Transferring books and progress between Kindles](https://sighery.com/posts/transferring-content-between-kindles/):
+  Dokumentation zu `cc.db` / `Entries`.
 
-## Offenlegung: KI-Unterstützung
+## KI-Unterstützung
 
 Dieses Projekt wird mit KI-Unterstützung entwickelt. Das Reverse Engineering
-der Kindle-Lesefortschritts-Ablage und die Umsetzung entstehen in
-Zusammenarbeit mit KI-Werkzeugen unter menschlicher Kontrolle. Die zugrunde
-liegenden Formate und Protokolle wurden durch die oben genannte
-Community-Forschung entdeckt, nicht durch KI.
+der Speicherung des Lesefortschritts und die Implementierung entstehen in
+Zusammenarbeit mit KI-Werkzeugen unter menschlicher Kontrolle. Die
+zugrundeliegenden Formate und Protokolle hat die oben genannte
+Community-Forschung entdeckt, nicht die KI.
 
 ## Lizenz
 
