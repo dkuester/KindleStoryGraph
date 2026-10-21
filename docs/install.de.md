@@ -164,6 +164,35 @@ Um ein Buch manuell zu verknüpfen oder eine falsche automatische Zuordnung zu
 Die Zuordnung greift beim nächsten Sync-Zyklus und überschreibt jede
 automatische Zuordnung.
 
+## 8. Ein Buch von StoryGraph entfernen
+
+Die Allowlist verhindert nur *künftige* Syncs; ein bereits synchronisiertes
+Buch bleibt auf deinem StoryGraph-Regal. Um es wieder herunterzunehmen:
+
+1. In KUAL Next → KindleStoryGraph **Remove from StoryGraph** öffnen. Dort
+   steht jedes Buch, das dieses Tool synchronisiert hat (die Gruppe fehlt, wenn
+   es keins gibt, und bei `sync_scope=all`).
+2. Das Buch antippen. Dafür braucht es WLAN und gültige Cookies. Das Menü
+   bleibt offen und das Buch verschwindet aus der Liste.
+
+Auf einem Rechner oder per SSH geht dasselbe mit
+`kindlestorygraph unsync <cde_key>`.
+
+Was passiert: Das Buch wird auf StoryGraph auf **to-read** gesetzt, danach aus
+`allowlist.ini` (damit der nächste Sync es nicht zurückholt) und aus
+`state.json` entfernt. Schlägt der StoryGraph-Aufruf fehl (kein Netz,
+abgelaufene Cookies), ändert sich lokal nichts — einfach erneut versuchen. Eine
+Zuordnung in `manual_mappings.ini` bleibt absichtlich erhalten: Wählst du das
+Buch später wieder aus, wird es mit derselben StoryGraph-Ausgabe verknüpft.
+
+Einschränkungen:
+
+- Bei `sync_scope=all` wird das abgelehnt, weil der nächste Durchlauf das Buch
+  wieder synchronisieren würde. Vorher auf `sync_scope=allowlist` umstellen.
+- Zurückgesetzt wird nur der Status. Ob StoryGraph beim Wechsel auf „to-read“
+  auch den gespeicherten Lesefortschritt verwirft, ist noch nicht geprüft; wenn
+  dir das wichtig ist, das Buch auf StoryGraph kontrollieren.
+
 ## Hinweise & Einschränkungen
 
 - Der Daemon wird manuell über KUAL gestartet. Nach einem Neustart startet er

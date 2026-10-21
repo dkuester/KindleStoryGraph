@@ -35,15 +35,8 @@ pub fn sync_once_from_paths(
     let snapshot = reader.snapshot(CONFIG.finish_threshold, CONFIG.min_progress)?;
     // Allowlist gate (default): only explicitly allowed books are synced.
     // With `sync_scope=all` every book is synced.
-    let snapshot: Vec<_> = if CONFIG.sync_all() {
-        snapshot
-    } else {
-        let allowlist = load_allowlist(Path::new(&CONFIG.allowlist_path));
-        snapshot
-            .into_iter()
-            .filter(|b| allowlist.contains(&b.cde_key))
-            .collect()
-    };
+    let allowlist = load_allowlist(Path::new(&CONFIG.allowlist_path));
+    let snapshot = sync::allowed_books(snapshot, &allowlist, CONFIG.sync_all());
     let mut state = State::load(state_path)?;
     let sg = RealStoryGraph;
     let cfg = SyncConfig {

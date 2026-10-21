@@ -1,11 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use serde::Serialize;
 
+use crate::config::remove_from_allowlist;
+use crate::error::UserError;
 use crate::reader::{BookProgress, Status};
-use crate::state::{BookState, State};
+use crate::state::{BookState, State, StateLock};
 use crate::storygraph::{self, Book, ReadingStatus, UserBook};
 
 /// Sync tuning knobs (the subset of config relevant to one sync pass).
@@ -368,6 +371,94 @@ fn skipped_behind(
         remote_percent: remote.progress_percent,
         remote_read: remote_is_read(remote),
     }
+}
+
+/// The allowlist gate in front of a sync pass: with `sync_all` every book is
+/// synced, otherwise only books whose `cde_key` is allowlisted.
+pub fn allowed_books(
+    snapshot: Vec<BookProgress>,
+    allowlist: &HashSet<String>,
+    sync_all: bool,
+) -> Vec<BookProgress> {
+    if sync_all {
+        snapshot
+    } else {
+        snapshot
+            .into_iter()
+            .filter(|b| allowlist.contains(&b.cde_key))
+            .collect()
+    }
+}
+
+/// Result of [`unsync_book`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Unsynced {
+    pub cde_key: String,
+    pub storygraph_id: String,
+    /// Whether the book was on the allowlist (and has been removed from it).
+    pub removed_from_allowlist: bool,
+}
+
+/// Takes a synced book back off the user's StoryGraph shelf ("Remove from
+/// StoryGraph"): resets its StoryGraph status to "to-read", then removes it
+/// from the allowlist (so the next pass does not re-attach it) and from the
+/// sync state.
+///
+/// Order matters for failure: the StoryGraph call comes first and the local
+/// files are only touched once it succeeded, so a network error leaves
+/// allowlist and state exactly as they were (the user can simply retry). The
+/// whole cycle runs under the [`StateLock`], so a concurrent sync pass can
+/// neither re-attach the book in between nor overwrite the state save.
+///
+/// The StoryGraph id comes from `state.json`, i.e. the book this tool
+/// actually pushed. A book that only has a manual mapping was never synced:
+/// setting it to "to-read" would *add* it to the shelf, so that is refused
+/// like an unknown book. The manual mapping itself is kept on purpose, so
+/// re-enabling the book later links the same StoryGraph edition again.
+///
+/// With `sync_all` (`sync_scope=all`) the allowlist does not gate anything
+/// and the next pass would put the book straight back — refused up front,
+/// before anything changes.
+pub fn unsync_book<SG: StoryGraphClient>(
+    sg: &SG,
+    cde_key: &str,
+    state_path: &Path,
+    allowlist_path: &Path,
+    sync_all: bool,
+) -> Result<Unsynced> {
+    let cde_key = cde_key.trim();
+    if sync_all {
+        return Err(UserError(
+            "sync_scope=all syncs every book, so the next pass would put this one straight back \
+             on StoryGraph. Set sync_scope=allowlist in config.ini first."
+                .to_owned(),
+        )
+        .into());
+    }
+
+    let _lock = StateLock::acquire(state_path)?;
+    let mut state = State::load(state_path)?;
+    let Some(storygraph_id) = state.books.get(cde_key).map(|b| b.storygraph_id.clone()) else {
+        return Err(UserError(format!(
+            "'{cde_key}' has not been synced to StoryGraph — nothing to remove."
+        ))
+        .into());
+    };
+
+    sg.set_status(&storygraph_id, ReadingStatus::ToRead as u8)?;
+
+    // Allowlist before state: if the state save failed afterwards, the stale
+    // entry is harmless (the book is no longer synced), whereas the reverse
+    // would let the next pass re-attach the book.
+    let removed_from_allowlist = remove_from_allowlist(allowlist_path, cde_key)?;
+    state.books.remove(cde_key);
+    state.save(state_path)?;
+
+    Ok(Unsynced {
+        cde_key: cde_key.to_owned(),
+        storygraph_id,
+        removed_from_allowlist,
+    })
 }
 
 #[cfg(test)]
@@ -1123,5 +1214,138 @@ mod tests {
         // The failed book has no state (retried next pass); the other one does.
         assert!(!state.books.contains_key("asin1"));
         assert_eq!(state.books["asin2"].storygraph_id, "sg-2");
+    }
+
+    /// Scratch dir with a `state.json` holding `asin1 → sg-1` (and an
+    /// unrelated `asin2 → sg-2`) plus an allowlist with both books.
+    fn unsync_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ksg_unsync_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state_path = dir.join("state.json");
+        let allowlist_path = dir.join("allowlist.ini");
+        let mut state = State::default();
+        state.books.insert(
+            "asin1".to_owned(),
+            attached("sg-1", "currently-reading", 40.0),
+        );
+        state
+            .books
+            .insert("asin2".to_owned(), attached("sg-2", "read", 100.0));
+        state.save(&state_path).unwrap();
+        std::fs::write(&allowlist_path, "# mine\nasin1\nasin2\n").unwrap();
+        (state_path, allowlist_path)
+    }
+
+    fn user_error(e: &anyhow::Error) -> &str {
+        &e.downcast_ref::<UserError>().expect("a UserError").0
+    }
+
+    #[test]
+    fn unsync_resets_to_read_and_forgets_the_book() {
+        let (state_path, allowlist_path) = unsync_fixture("ok");
+        let mock = mock_with("", "");
+
+        let res = unsync_book(&mock, "asin1", &state_path, &allowlist_path, false).unwrap();
+
+        assert_eq!(
+            res,
+            Unsynced {
+                cde_key: "asin1".to_owned(),
+                storygraph_id: "sg-1".to_owned(),
+                removed_from_allowlist: true,
+            }
+        );
+        assert_eq!(
+            *mock.status_calls.borrow(),
+            vec![("sg-1".to_owned(), ReadingStatus::ToRead as u8)]
+        );
+        assert!(mock.progress_calls.borrow().is_empty());
+        let state = State::load(&state_path).unwrap();
+        assert!(!state.books.contains_key("asin1"));
+        assert_eq!(state.books["asin2"].storygraph_id, "sg-2");
+        assert_eq!(
+            std::fs::read_to_string(&allowlist_path).unwrap(),
+            "# mine\nasin2\n"
+        );
+        let _ = std::fs::remove_dir_all(state_path.parent().unwrap());
+    }
+
+    #[test]
+    fn unsync_unknown_book_is_a_user_error_and_changes_nothing() {
+        let (state_path, allowlist_path) = unsync_fixture("unknown");
+        let state_before = std::fs::read_to_string(&state_path).unwrap();
+        let mock = mock_with("", "");
+
+        let err = unsync_book(&mock, "nope", &state_path, &allowlist_path, false).unwrap_err();
+
+        assert!(user_error(&err).contains("has not been synced"));
+        assert!(mock.status_calls.borrow().is_empty());
+        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), state_before);
+        assert_eq!(
+            std::fs::read_to_string(&allowlist_path).unwrap(),
+            "# mine\nasin1\nasin2\n"
+        );
+        let _ = std::fs::remove_dir_all(state_path.parent().unwrap());
+    }
+
+    #[test]
+    fn unsync_network_failure_leaves_local_files_untouched() {
+        let (state_path, allowlist_path) = unsync_fixture("netfail");
+        let state_before = std::fs::read_to_string(&state_path).unwrap();
+        let mut mock = mock_with("", "");
+        mock.failing.push("sg-1".to_owned());
+
+        let err = unsync_book(&mock, "asin1", &state_path, &allowlist_path, false).unwrap_err();
+
+        assert!(format!("{err:#}").contains("simulated failure"));
+        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), state_before);
+        assert_eq!(
+            std::fs::read_to_string(&allowlist_path).unwrap(),
+            "# mine\nasin1\nasin2\n"
+        );
+        let _ = std::fs::remove_dir_all(state_path.parent().unwrap());
+    }
+
+    #[test]
+    fn unsync_is_refused_with_sync_scope_all() {
+        let (state_path, allowlist_path) = unsync_fixture("all");
+        let state_before = std::fs::read_to_string(&state_path).unwrap();
+        let mock = mock_with("", "");
+
+        let err = unsync_book(&mock, "asin1", &state_path, &allowlist_path, true).unwrap_err();
+
+        assert!(user_error(&err).contains("sync_scope=all"));
+        assert!(mock.status_calls.borrow().is_empty());
+        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), state_before);
+        let _ = std::fs::remove_dir_all(state_path.parent().unwrap());
+    }
+
+    #[test]
+    fn unsynced_book_is_not_reattached_by_the_next_pass() {
+        let (state_path, allowlist_path) = unsync_fixture("reattach");
+        // The book is still in progress on the Kindle and would match by title.
+        let mock = mock_with("The Great Gatsby", "sg-1");
+        // A manual mapping is kept on purpose — it must not re-attach either.
+        let mappings = HashMap::from([("asin1".to_owned(), "sg-1".to_owned())]);
+        unsync_book(&mock, "asin1", &state_path, &allowlist_path, false).unwrap();
+        mock.status_calls.borrow_mut().clear();
+
+        let snapshot = vec![book(
+            "asin1",
+            "The Great Gatsby",
+            55.0,
+            Status::CurrentlyReading,
+        )];
+        let allowlist = crate::config::load_allowlist(&allowlist_path);
+        let snapshot = allowed_books(snapshot, &allowlist, false);
+        let mut state = State::load(&state_path).unwrap();
+        let outcomes = sync_once(&snapshot, &mut state, CFG, &mock, &mappings, false);
+
+        assert!(outcomes.is_empty());
+        assert!(mock.status_calls.borrow().is_empty());
+        assert!(mock.progress_calls.borrow().is_empty());
+        assert!(!state.books.contains_key("asin1"));
+        let _ = std::fs::remove_dir_all(state_path.parent().unwrap());
     }
 }
