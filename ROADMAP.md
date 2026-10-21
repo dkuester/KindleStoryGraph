@@ -88,6 +88,12 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   reading journal ("Started reading", progress entries) intact, while
   "Remove book" leaves no status, progress or journal entry behind. It also
   deletes any review, hence the separate, explicitly confirmed action.
+- Removing moved out of KUAL into the FBInk UI: a KUAL tap runs its action at
+  once, with no confirmation and no result, which is wrong for a change to the
+  public shelf (and for "Remove completely" irreversible). KUAL now only has a
+  "Remove from StoryGraph... (N)" entry that opens the UI on the Remove list
+  (`ui --remove`); the per-book KUAL groups and `bin/unsync-book.sh` /
+  `bin/remove-completely.sh` are gone. `unsync [--completely]` stays as CLI.
 
 ## Quick wins
 
@@ -106,11 +112,12 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   `storygraph::remove_book` against the live account (only the same request
   from a Python script was run, on one test book), and the device flows.
   Pick a throwaway book *without a review* (e.g. from `search`): attach it
-  (allowlist + "Sync now"), then on the Kindle run KUAL "Remove completely" →
-  book → "Yes, delete history + review", and check on StoryGraph that the
-  book has no status, progress or journal entry. Repeat via the FBInk UI
-  (Link → Remove → book → "Remove completely..." → Delete) and once with the
-  plain "Remove" (expect "to-read"; remove the book by hand afterwards).
+  (allowlist + "Sync now"), then on the Kindle open KUAL "Remove from
+  StoryGraph..." (the UI must start on the Remove list) → book → "Remove
+  completely..." → Delete, and check on StoryGraph that the book has no
+  status, progress or journal entry. Repeat once from inside the UI (Link →
+  Remove) with the plain "Remove" (expect "to-read"; remove the book by hand
+  afterwards).
   On the device also check that the button rows fit (Remove / Cancel,
   "Remove completely...") and that Back on "Removing..." keeps it running.
   Effort: small.

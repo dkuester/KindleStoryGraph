@@ -169,17 +169,18 @@ automatische Zuordnung.
 Die Allowlist verhindert nur *künftige* Syncs; ein bereits synchronisiertes
 Buch bleibt auf deinem StoryGraph-Regal. Um es wieder herunterzunehmen:
 
-1. In KUAL Next → KindleStoryGraph **Remove from StoryGraph** öffnen. Dort
-   steht jedes Buch, das dieses Tool synchronisiert hat (die Gruppe fehlt, wenn
-   es keins gibt, und bei `sync_scope=all`).
-2. Das Buch antippen. Dafür braucht es WLAN und gültige Cookies. Das Menü
-   bleibt offen und das Buch verschwindet aus der Liste.
+1. In KUAL Next → KindleStoryGraph **Remove from StoryGraph... (N)** antippen.
+   Das öffnet die Einstellungs-Oberfläche direkt mit der Liste aller Bücher,
+   die dieses Tool synchronisiert hat (der Eintrag fehlt, wenn es keins gibt,
+   und bei `sync_scope=all`). Innerhalb der Oberfläche ist das dieselbe Liste
+   wie **Verknüpfen** → **Entfernen**.
+2. Das Buch antippen und mit **Entfernen** bestätigen (oder **Abbrechen**).
+   Dafür braucht es WLAN und gültige Cookies. Der Aufruf läuft im Hintergrund;
+   **Zurück** lässt ihn weiterlaufen, das Ergebnis erscheint als Hinweis.
 
-In der Einstellungs-Oberfläche auf dem Gerät (**Open settings UI**) geht das
-über **Verknüpfen** → **Entfernen**: ein synchronisiertes Buch antippen und
-mit **Entfernen** bestätigen. Der Aufruf läuft im Hintergrund; **Zurück** lässt
-ihn weiterlaufen, das Ergebnis erscheint als Hinweis. Auf einem Rechner oder
-per SSH geht dasselbe mit `kindlestorygraph unsync <cde_key>`.
+Entfernt wird nur in der Einstellungs-Oberfläche, weil ein Tipp in KUAL seine
+Aktion sofort ausführt – ohne Rückfrage und ohne Rückmeldung. Auf einem Rechner
+oder per SSH geht dasselbe mit `kindlestorygraph unsync <cde_key>`.
 
 Was passiert: Das Buch wird auf StoryGraph auf **to-read** gesetzt, danach aus
 `allowlist.ini` (damit der nächste Sync es nicht zurückholt) und aus
@@ -206,11 +207,8 @@ und eine eventuell geschriebene Rezension**. Das ist nicht rückgängig zu
 machen. Deine Tags am Buch bleiben erhalten. Lokal passiert dasselbe wie oben
 (Allowlist und `state.json`; die manuelle Zuordnung bleibt).
 
-- KUAL: **Remove completely (N) - deletes history + review** → Buch antippen →
-  **Yes, delete history + review** antippen. Der zweite Tipp ist die
-  Bestätigung.
-- Einstellungs-Oberfläche: **Verknüpfen** → **Entfernen** → Buch →
-  **Komplett entfernen...** → ein zweiter Warnbildschirm → **Löschen**.
+- Einstellungs-Oberfläche (auch über KUAL **Remove from StoryGraph...**):
+  Buch → **Komplett entfernen...** → ein zweiter Warnbildschirm → **Löschen**.
 - CLI: `kindlestorygraph unsync --completely <cde_key>`.
 
 ## Hinweise & Einschränkungen

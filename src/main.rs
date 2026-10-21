@@ -238,7 +238,11 @@ struct ImportCookies {
 /// open the on-device settings UI (drawn directly to the e-ink framebuffer).
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand, name = "ui")]
-struct Ui {}
+struct Ui {
+    /// open directly on the "Remove from StoryGraph" list (the KUAL entry)
+    #[argh(switch)]
+    remove: bool,
+}
 
 fn main() {
     let args: Args = argh::from_env();
@@ -406,7 +410,7 @@ fn run(cmd: Command) -> anyhow::Result<()> {
             setup::doctor(&cc_db, d.network)?;
         }
         Command::ImportCookies(i) => setup::import_cookies(Path::new(&i.path))?,
-        Command::Ui(_) => kindlestorygraph::ui::run()?,
+        Command::Ui(u) => kindlestorygraph::ui::run(u.remove)?,
     }
     Ok(())
 }

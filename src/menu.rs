@@ -91,7 +91,7 @@ fn render(cc_db: &Path) -> (Value, bool) {
     let last_sync_at = state.books.values().map(|b| b.last_synced_at).max();
     let cookies_set = !CONFIG.session_cookie.is_empty();
     // With sync_scope=all `unsync` is refused (the next pass would re-attach
-    // the book), so the group is not offered at all.
+    // the book), so the remove entry is not offered at all.
     let on_shelf: HashSet<String> = if CONFIG.sync_all() {
         HashSet::new()
     } else {
@@ -193,41 +193,15 @@ pub fn render_with(
         }));
     }
 
-    // Same one-process contract as the toggle: unsync rewrites menu.json
-    // before KUAL Next re-reads it, and the book drops out of this group.
-    let unsync_items: Vec<Value> = snapshot
+    // Removing a book changes the public StoryGraph shelf ("Remove completely"
+    // even deletes history and review), and a KUAL tap runs its action at once
+    // with no way to confirm or to show the result. So KUAL only offers the
+    // entry point; the FBInk UI lists the books, asks for confirmation and
+    // reports success or failure.
+    let removable = snapshot
         .iter()
         .filter(|b| on_shelf.contains(&b.cde_key))
-        .map(|b| {
-            json!({
-                "name": b.title,
-                "action": "bin/unsync-book.sh",
-                "params": b.cde_key,
-                "exitmenu": false,
-                "refresh": true,
-            })
-        })
-        .collect();
-
-    // The irreversible variant gets a confirmation step: book → submenu whose
-    // only entry says what is deleted. KUAL has no dialogs, so the extra tap
-    // (plus the explicit label) is the confirmation.
-    let remove_completely_items: Vec<Value> = snapshot
-        .iter()
-        .filter(|b| on_shelf.contains(&b.cde_key))
-        .map(|b| {
-            json!({
-                "name": b.title,
-                "items": [json!({
-                    "name": "Yes, delete history + review",
-                    "action": "bin/remove-completely.sh",
-                    "params": b.cde_key,
-                    "exitmenu": false,
-                    "refresh": true,
-                })],
-            })
-        })
-        .collect();
+        .count();
 
     let status_line = if !cookies_set {
         "Cookies not set — run setup on a computer".to_owned()
@@ -304,21 +278,12 @@ pub fn render_with(
         "priority": 8,
         "action": "bin/ui.sh",
     }));
-    if !unsync_items.is_empty() {
+    if removable > 0 {
         items.push(json!({
-            "name": format!("Remove from StoryGraph ({})", unsync_items.len()),
+            "name": format!("Remove from StoryGraph... ({removable})"),
             "priority": 9,
-            "items": unsync_items,
-        }));
-    }
-    if !remove_completely_items.is_empty() {
-        items.push(json!({
-            "name": format!(
-                "Remove completely ({}) - deletes history + review",
-                remove_completely_items.len()
-            ),
-            "priority": 10,
-            "items": remove_completely_items,
+            "action": "bin/ui.sh",
+            "params": "--remove",
         }));
     }
 
@@ -706,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_group_lists_synced_books_and_keeps_the_menu_open() {
+    fn remove_entry_opens_the_ui_on_the_remove_screen() {
         let db = temp_cc_db(
             "ksg_test_menu_cc6.db",
             &[("KEY1", "Dune", 42.0), ("KEY2", "Emma", 88.0)],
@@ -722,7 +687,7 @@ mod tests {
             None,
             true,
         );
-        let group = menu["items"]
+        let entry = menu["items"]
             .as_array()
             .unwrap()
             .iter()
@@ -731,23 +696,23 @@ mod tests {
                     .as_str()
                     .is_some_and(|n| n.starts_with("Remove from StoryGraph"))
             })
-            .expect("remove group");
-        assert_eq!(group["name"], "Remove from StoryGraph (1)");
-        let entries = group["items"].as_array().unwrap();
-        assert_eq!(entries.len(), 1, "only synced books are offered");
-        let entry = &entries[0];
-        assert_eq!(entry["name"], "Dune");
-        assert_eq!(entry["action"], "bin/unsync-book.sh");
-        assert_eq!(entry["params"], "KEY1");
-        // Both flags are load-bearing in KUAL Next (see the toggle test).
-        assert_eq!(entry["exitmenu"], false);
-        assert_eq!(entry["refresh"], true);
+            .expect("remove entry");
+        assert_eq!(entry["name"], "Remove from StoryGraph... (1)");
+        assert_eq!(entry["action"], "bin/ui.sh");
+        assert_eq!(entry["params"], "--remove");
+        // No per-book entries: a KUAL tap can't be confirmed, so removing
+        // (and "Remove completely") only happens in the FBInk UI.
+        assert!(entry.get("items").is_none());
+        assert!(all_entries(&menu).iter().all(|e| {
+            let action = e["action"].as_str().unwrap_or_default();
+            !action.contains("unsync") && !action.contains("remove-completely")
+        }));
 
         std::fs::remove_file(&db).ok();
     }
 
     #[test]
-    fn remove_group_is_hidden_without_synced_books() {
+    fn remove_entry_is_hidden_without_synced_books() {
         let db = temp_cc_db("ksg_test_menu_cc7.db", &[("KEY1", "Dune", 42.0)]);
         let (menu, _) = render_with(
             &db,
@@ -758,58 +723,7 @@ mod tests {
             None,
             true,
         );
-        assert!(
-            !all_entries(&menu)
-                .iter()
-                .any(|e| e["action"] == "bin/unsync-book.sh")
-        );
-
-        std::fs::remove_file(&db).ok();
-    }
-
-    #[test]
-    fn remove_completely_needs_a_confirming_second_tap() {
-        let db = temp_cc_db(
-            "ksg_test_menu_cc8.db",
-            &[("KEY1", "Dune", 42.0), ("KEY2", "Emma", 88.0)],
-        );
-        let synced = HashSet::from(["KEY1".to_owned()]);
-
-        let (menu, _) = render_with(
-            &db,
-            &HashSet::new(),
-            &HashMap::new(),
-            &synced,
-            &SearchCache::default(),
-            None,
-            true,
-        );
-        let group = menu["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|g| {
-                g["name"]
-                    .as_str()
-                    .is_some_and(|n| n.starts_with("Remove completely"))
-            })
-            .expect("remove-completely group");
-        assert_eq!(
-            group["name"],
-            "Remove completely (1) - deletes history + review"
-        );
-        let books = group["items"].as_array().unwrap();
-        assert_eq!(books.len(), 1, "only synced books are offered");
-        // The book itself is a submenu (no action): tapping it only opens the
-        // confirmation entry.
-        assert_eq!(books[0]["name"], "Dune");
-        assert!(books[0].get("action").is_none());
-        let confirm = &books[0]["items"][0];
-        assert_eq!(confirm["name"], "Yes, delete history + review");
-        assert_eq!(confirm["action"], "bin/remove-completely.sh");
-        assert_eq!(confirm["params"], "KEY1");
-        assert_eq!(confirm["exitmenu"], false);
-        assert_eq!(confirm["refresh"], true);
+        assert!(!all_entries(&menu).iter().any(|e| e["params"] == "--remove"));
 
         std::fs::remove_file(&db).ok();
     }

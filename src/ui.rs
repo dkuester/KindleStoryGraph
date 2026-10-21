@@ -104,15 +104,19 @@ fn pad_center(s: &str, cols: usize) -> String {
     out
 }
 
+/// Runs the on-device UI. `open_remove` starts on the "Remove from
+/// StoryGraph" list instead of the main screen (the KUAL entry point).
 #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
-pub fn run() -> Result<()> {
+pub fn run(_open_remove: bool) -> Result<()> {
     eprintln!("The `ui` command is only available on the Kindle (ARM Linux).");
     Ok(())
 }
 
+/// Runs the on-device UI. `open_remove` starts on the "Remove from
+/// StoryGraph" list instead of the main screen (the KUAL entry point).
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-pub fn run() -> Result<()> {
-    imp::run()
+pub fn run(open_remove: bool) -> Result<()> {
+    imp::run(open_remove)
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
@@ -1624,7 +1628,7 @@ mod imp {
         }
     }
 
-    pub fn run() -> Result<()> {
+    pub fn run(open_remove: bool) -> Result<()> {
         let fb = Fb::init()?;
 
         // Load data; on failure, show the error and wait for a tap.
@@ -1667,6 +1671,22 @@ mod imp {
                 return Ok(());
             }
         };
+
+        // Started from the KUAL "Remove from StoryGraph..." entry: open the
+        // list right away. Back then leads to Link and Main as usual.
+        if open_remove {
+            if CONFIG.sync_all() {
+                ui.note = Some(
+                    t(
+                        "Remove is off with sync_scope=all",
+                        "Entfernen ist bei sync_scope=all aus",
+                    )
+                    .to_owned(),
+                );
+            } else {
+                ui.screen = Screen::Remove;
+            }
+        }
 
         ui.draw(true);
 
