@@ -17,15 +17,19 @@ pub(crate) struct BookRow {
     pub percent: f64,
     pub allowlisted: bool,
     pub linked: bool,
+    /// Synced by this tool (in `state.json`), i.e. on the StoryGraph shelf.
+    pub on_shelf: bool,
 }
 
 /// Build the display rows for the snapshot (pure, host-testable). The badges
 /// (`[sync]`, `[linked]`) are folded into a single trailing suffix.
+/// `on_shelf` are the books in `state.json` (offered under "Remove").
 #[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 pub(crate) fn build_rows(
     snapshot: &[crate::reader::BookProgress],
     allowlist: &std::collections::HashSet<String>,
     linked: &std::collections::HashMap<String, String>,
+    on_shelf: &std::collections::HashSet<String>,
 ) -> Vec<BookRow> {
     snapshot
         .iter()
@@ -36,7 +40,19 @@ pub(crate) fn build_rows(
             percent: b.percent,
             allowlisted: allowlist.contains(&b.cde_key),
             linked: linked.contains_key(&b.cde_key),
+            on_shelf: on_shelf.contains(&b.cde_key),
         })
+        .collect()
+}
+
+/// Indices of the rows the "Remove from StoryGraph" list offers: the books
+/// this tool synced (pure, host-testable).
+#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
+pub(crate) fn shelf_indices(rows: &[BookRow]) -> Vec<usize> {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, b)| b.on_shelf)
+        .map(|(i, _)| i)
         .collect()
 }
 
@@ -110,7 +126,9 @@ mod imp {
 
     use anyhow::{Context, Result, bail};
 
-    use crate::config::{CONFIG, add_manual_mapping, load_allowlist, toggle_allowlist};
+    use crate::config::{
+        CONFIG, add_manual_mapping, load_allowlist, load_manual_mappings, toggle_allowlist,
+    };
     use crate::daemon;
     use crate::fbink as fb;
     use crate::fbink::{FBInkConfig, FBInkState, InputEvent};
@@ -118,6 +136,7 @@ mod imp {
     use crate::reader::Reader;
     use crate::state::State;
     use crate::storygraph::Book;
+    use crate::sync::{RealStoryGraph, Unsynced, unsync_book};
 
     /// Pick a UI string by configured language (German when `language` is "de").
     fn t(en: &'static str, de: &'static str) -> &'static str {
@@ -160,13 +179,14 @@ mod imp {
         }
     }
 
-    /// Classify a search error into a short, user-actionable line.
-    fn classify_search_error(msg: &str) -> String {
+    /// Classify a StoryGraph (search/remove) error into a short,
+    /// user-actionable line.
+    fn classify_network_error(msg: &str) -> String {
         let lower = msg.to_lowercase();
         if lower.contains("timed out") || lower.contains("timeout") {
             t(
-                "Search timed out - check network",
-                "Suche: Zeitüberschreitung - Netz prüfen",
+                "Timed out - check network",
+                "Zeitüberschreitung - Netz prüfen",
             )
             .to_owned()
         } else if (lower.contains("session") && lower.contains("expired"))
@@ -324,11 +344,23 @@ mod imp {
         LinkSearch,
         /// Show the candidate list for the chosen book.
         LinkPick,
+        /// Pick a synced book to take off StoryGraph (scrollable).
+        Remove,
+        /// "Remove <title> from StoryGraph?" with Remove / Cancel.
+        RemoveConfirm,
+        /// Remove running in the background; the tap loop polls for it.
+        RemoveRunning,
     }
 
     /// An in-flight StoryGraph search spawned on a background thread.
     struct SearchPending {
         rx: mpsc::Receiver<Result<Vec<Book>, String>>,
+        label: String,
+    }
+
+    /// An in-flight "Remove from StoryGraph" spawned on a background thread.
+    struct RemovePending {
+        rx: mpsc::Receiver<Result<Unsynced, String>>,
         label: String,
     }
 
@@ -347,6 +379,8 @@ mod imp {
         link_key: Option<String>,
         candidates: Vec<Candidate>,
         search: Option<SearchPending>,
+        remove_key: Option<String>,
+        removing: Option<RemovePending>,
     }
 
     impl<'a> Ui<'a> {
@@ -383,6 +417,9 @@ mod imp {
                 Screen::Link => self.draw_link(),
                 Screen::LinkSearch => self.draw_link_search(),
                 Screen::LinkPick => self.draw_link_pick(),
+                Screen::Remove => self.draw_remove(),
+                Screen::RemoveConfirm => self.draw_remove_confirm(),
+                Screen::RemoveRunning => self.draw_remove_running(),
             }
             self.fb.refresh(flash);
         }
@@ -483,14 +520,34 @@ mod imp {
             self.draw_note();
         }
 
-        // ── Shared book list (Main & Link) ──────────────────────────────────
+        // ── Shared book list (Main, Link & Remove) ──────────────────────────
+
+        /// Indices into `self.rows` of the books the current screen lists:
+        /// only the synced ones on the Remove screen, all books elsewhere.
+        fn list(&self) -> Vec<usize> {
+            if self.screen == Screen::Remove {
+                super::shelf_indices(&self.rows)
+            } else {
+                (0..self.rows.len()).collect()
+            }
+        }
+
+        /// The row index behind a tap on grid row `row` of the book list.
+        fn book_at(&self, row: i16) -> Option<usize> {
+            if row < BOOK_START_ROW || row >= self.down_nav_row() {
+                return None;
+            }
+            let pos = self.list_offset + ((row - BOOK_START_ROW) / 2) as usize;
+            self.list().get(pos).copied()
+        }
 
         /// Draws the section header (with pagination + up indicator), the
         /// visible book slice, and the down-scroll indicator. Uses
         /// `self.list_offset`.
         fn draw_book_list(&self) {
             let fb = self.fb;
-            let total = self.rows.len();
+            let list = self.list();
+            let total = list.len();
             let visible = self.visible_books();
             let max_offset = total.saturating_sub(visible);
             let up = self.list_offset > 0;
@@ -515,7 +572,7 @@ mod imp {
             );
 
             let mut r = BOOK_START_ROW;
-            for i in self.list_offset..(self.list_offset + visible).min(total) {
+            for &i in list.iter().skip(self.list_offset).take(visible) {
                 let book = &self.rows[i];
                 let title = pad_right(&book.title, fb.cols.saturating_sub(2));
                 let mut meta = format!(" {:>3.0}%", book.percent);
@@ -663,6 +720,19 @@ mod imp {
                 false,
                 false,
             );
+            // Hidden with sync_scope=all: the next pass would re-attach the
+            // book, so `unsync_book` refuses it anyway.
+            if !CONFIG.sync_all() {
+                let remove_label = t(" [ Remove ]", " [ Entfernen ]");
+                let remove_col = fb.cols as i16 - remove_label.chars().count() as i16 - 2;
+                fb.print(
+                    self.button_row(),
+                    remove_col.max(0),
+                    remove_label,
+                    false,
+                    false,
+                );
+            }
             fb.print(
                 self.hint_row(),
                 2,
@@ -838,6 +908,183 @@ mod imp {
             );
         }
 
+        // ── Remove screens ──────────────────────────────────────────────────
+
+        fn draw_remove(&self) {
+            let fb = self.fb;
+            fb.print(
+                TITLE_ROW,
+                0,
+                &pad_center("KindleStoryGraph", fb.cols),
+                true,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_1,
+                2,
+                &pad_right(
+                    t("Remove from StoryGraph", "Von StoryGraph entfernen"),
+                    fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_2,
+                2,
+                &pad_right(
+                    t("Tap a synced book", "Synchronisiertes Buch antippen"),
+                    fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+
+            self.draw_book_list();
+            if self.list().is_empty() {
+                fb.print(
+                    BOOK_START_ROW,
+                    2,
+                    &pad_right(
+                        t("(no synced books)", "(keine synchronisierten Bücher)"),
+                        fb.cols.saturating_sub(2),
+                    ),
+                    false,
+                    false,
+                );
+            }
+
+            fb.print(
+                self.button_row(),
+                2,
+                t(" [ Back ]", " [ Zurück ]"),
+                false,
+                false,
+            );
+            fb.print(
+                self.hint_row(),
+                2,
+                &pad_right(
+                    t(
+                        "Book = remove   ^ = up   v = down",
+                        "Buch = entfernen   ^ = hoch   v = runter",
+                    ),
+                    fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+
+            self.draw_note();
+        }
+
+        fn draw_remove_confirm(&self) {
+            let fb = self.fb;
+            let width = fb.cols.saturating_sub(2);
+            fb.print(
+                TITLE_ROW,
+                0,
+                &pad_center("KindleStoryGraph", fb.cols),
+                true,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_1,
+                2,
+                &pad_right(
+                    t("Remove from StoryGraph?", "Von StoryGraph entfernen?"),
+                    width,
+                ),
+                false,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_3,
+                2,
+                &pad_right(&self.remove_title(), width),
+                true,
+                false,
+            );
+            let lines: [&str; 3] = if de() {
+                [
+                    "Setzt das Buch auf StoryGraph auf",
+                    "\"to-read\" und synchronisiert es",
+                    "nicht mehr. Braucht WLAN.",
+                ]
+            } else {
+                [
+                    "Sets the book to \"to-read\" on",
+                    "StoryGraph and stops syncing it.",
+                    "Needs Wi-Fi.",
+                ]
+            };
+            for (i, line) in lines.iter().enumerate() {
+                fb.print(
+                    SECTION_ROW + i as i16,
+                    2,
+                    &pad_right(line, width),
+                    false,
+                    false,
+                );
+            }
+
+            let btn = self.button_row();
+            fb.print(btn, 2, t(" [ Remove ]", " [ Entfernen ]"), false, false);
+            let cancel_label = t(" [ Cancel ]", " [ Abbrechen ]");
+            let cancel_col = fb.cols as i16 - cancel_label.chars().count() as i16 - 2;
+            fb.print(btn, cancel_col.max(0), cancel_label, false, false);
+        }
+
+        fn draw_remove_running(&self) {
+            let fb = self.fb;
+            fb.print(
+                TITLE_ROW,
+                0,
+                &pad_center("KindleStoryGraph", fb.cols),
+                true,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_2,
+                2,
+                &pad_right(t("Removing...", "Entferne..."), fb.cols.saturating_sub(2)),
+                false,
+                false,
+            );
+            let label = self
+                .removing
+                .as_ref()
+                .map(|p| p.label.clone())
+                .unwrap_or_default();
+            fb.print(
+                STATUS_ROW_3,
+                2,
+                &pad_right(&label, fb.cols.saturating_sub(2)),
+                false,
+                false,
+            );
+            fb.print(
+                self.button_row(),
+                2,
+                t(" [ Back ]", " [ Zurück ]"),
+                false,
+                false,
+            );
+            fb.print(
+                self.hint_row(),
+                2,
+                &pad_right(
+                    t(
+                        "Back = keeps running in background",
+                        "Zurück = läuft im Hintergrund weiter",
+                    ),
+                    fb.cols.saturating_sub(2),
+                ),
+                false,
+                false,
+            );
+        }
+
         // ── Tap handling ────────────────────────────────────────────────────
 
         fn tap(&mut self, x: i32, y: i32) -> Tap {
@@ -850,6 +1097,9 @@ mod imp {
                 Screen::Link => self.tap_link(row, col),
                 Screen::LinkSearch => self.tap_link_search(row, col),
                 Screen::LinkPick => self.tap_link_pick(row, col),
+                Screen::Remove => self.tap_remove(row, col),
+                Screen::RemoveConfirm => self.tap_remove_confirm(row, col),
+                Screen::RemoveRunning => self.tap_remove_running(row, col),
             }
         }
 
@@ -866,7 +1116,7 @@ mod imp {
         /// Scroll the book list down one page; returns true when it moved.
         fn scroll_down(&mut self) -> bool {
             let vis = self.visible_books();
-            let max = self.rows.len().saturating_sub(vis);
+            let max = self.list().len().saturating_sub(vis);
             if self.list_offset >= max {
                 return false;
             }
@@ -903,17 +1153,14 @@ mod imp {
             if row == self.down_nav_row() && self.scroll_down() {
                 return Tap::Redraw;
             }
-            if row >= BOOK_START_ROW && row < self.down_nav_row() {
-                let idx = self.list_offset + ((row - BOOK_START_ROW) / 2) as usize;
-                if idx < self.rows.len() {
-                    let key = self.rows[idx].cde_key.clone();
-                    let allowed =
-                        toggle_allowlist(Path::new(&CONFIG.allowlist_path), &key).unwrap_or(false);
-                    self.rows[idx].allowlisted = allowed;
-                    self.synced = self.rows.iter().filter(|b| b.allowlisted).count();
-                    self.note = None;
-                    return Tap::Redraw;
-                }
+            if let Some(idx) = self.book_at(row) {
+                let key = self.rows[idx].cde_key.clone();
+                let allowed =
+                    toggle_allowlist(Path::new(&CONFIG.allowlist_path), &key).unwrap_or(false);
+                self.rows[idx].allowlisted = allowed;
+                self.synced = self.rows.iter().filter(|b| b.allowlisted).count();
+                self.note = None;
+                return Tap::Redraw;
             }
             Tap::None
         }
@@ -927,8 +1174,20 @@ mod imp {
             Tap::None
         }
 
-        fn tap_link(&mut self, row: i16, _col: i16) -> Tap {
+        fn tap_link(&mut self, row: i16, col: i16) -> Tap {
             if row == self.button_row() {
+                if col >= self.fb.cols as i16 / 2 && !CONFIG.sync_all() {
+                    if self.removing.is_some() {
+                        self.note = Some(
+                            t("A removal is still running", "Entfernen läuft noch").to_owned(),
+                        );
+                    } else {
+                        self.screen = Screen::Remove;
+                        self.list_offset = 0;
+                        self.note = None;
+                    }
+                    return Tap::Redraw;
+                }
                 self.screen = Screen::Main;
                 self.note = None;
                 return Tap::Redraw;
@@ -939,14 +1198,148 @@ mod imp {
             if row == self.down_nav_row() && self.scroll_down() {
                 return Tap::Redraw;
             }
-            if row >= BOOK_START_ROW && row < self.down_nav_row() {
-                let idx = self.list_offset + ((row - BOOK_START_ROW) / 2) as usize;
-                if idx < self.rows.len() {
-                    self.start_link_search(idx);
-                    return Tap::Redraw;
-                }
+            if let Some(idx) = self.book_at(row) {
+                self.start_link_search(idx);
+                return Tap::Redraw;
             }
             Tap::None
+        }
+
+        fn tap_remove(&mut self, row: i16, _col: i16) -> Tap {
+            if row == self.button_row() {
+                self.screen = Screen::Link;
+                self.list_offset = 0;
+                self.note = None;
+                return Tap::Redraw;
+            }
+            if row == SECTION_ROW && self.scroll_up() {
+                return Tap::Redraw;
+            }
+            if row == self.down_nav_row() && self.scroll_down() {
+                return Tap::Redraw;
+            }
+            if let Some(idx) = self.book_at(row) {
+                self.remove_key = Some(self.rows[idx].cde_key.clone());
+                self.screen = Screen::RemoveConfirm;
+                self.note = None;
+                return Tap::Redraw;
+            }
+            Tap::None
+        }
+
+        fn tap_remove_confirm(&mut self, row: i16, col: i16) -> Tap {
+            if row != self.button_row() {
+                return Tap::None;
+            }
+            if col < self.fb.cols as i16 / 2 {
+                self.start_remove();
+            } else {
+                self.screen = Screen::Remove;
+            }
+            Tap::Redraw
+        }
+
+        fn tap_remove_running(&mut self, row: i16, _col: i16) -> Tap {
+            if row == self.button_row() {
+                // The removal keeps running; `drain_remove` applies its result
+                // on whichever screen is showing when it arrives.
+                self.screen = Screen::Main;
+                self.list_offset = 0;
+                self.note = Some(
+                    t(
+                        "Removing in the background...",
+                        "Entfernen läuft im Hintergrund...",
+                    )
+                    .to_owned(),
+                );
+                return Tap::Redraw;
+            }
+            Tap::None
+        }
+
+        /// The title of the book a removal is about, for the screens.
+        fn remove_title(&self) -> String {
+            self.remove_key
+                .as_ref()
+                .and_then(|k| self.rows.iter().find(|b| &b.cde_key == k))
+                .map(|b| b.title.clone())
+                .unwrap_or_default()
+        }
+
+        /// Run `unsync_book` on a background thread (network: the tap loop
+        /// must stay responsive, and the HTTP client has no global timeout).
+        fn start_remove(&mut self) {
+            let Some(key) = self.remove_key.clone() else {
+                self.screen = Screen::Remove;
+                return;
+            };
+            let label = self.remove_title();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let res = unsync_book(
+                    &RealStoryGraph,
+                    &key,
+                    Path::new(&CONFIG.state_path),
+                    Path::new(&CONFIG.allowlist_path),
+                    CONFIG.sync_all(),
+                )
+                .map_err(|e| format!("{e:#}"));
+                let _ = tx.send(res);
+            });
+            self.removing = Some(RemovePending { rx, label });
+            self.screen = Screen::RemoveRunning;
+            self.note = None;
+        }
+
+        /// Poll the in-flight removal; on completion update rows, note and
+        /// screen and return true (caller redraws).
+        fn drain_remove(&mut self) -> bool {
+            let result = match &self.removing {
+                Some(p) => p.rx.try_recv(),
+                None => return false,
+            };
+            let res = match result {
+                Ok(res) => res,
+                Err(mpsc::TryRecvError::Empty) => return false,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Err(t("Remove failed (see log)", "Entfernen fehlgeschlagen (Log)").to_owned())
+                }
+            };
+            let label = self.removing.take().map(|p| p.label).unwrap_or_default();
+            let running = self.screen == Screen::RemoveRunning;
+            match res {
+                Ok(done) => {
+                    // The manual mapping is kept on purpose, so the book may
+                    // still count as linked.
+                    let mappings = load_manual_mappings(Path::new(&CONFIG.manual_mappings_path));
+                    if let Some(row) = self.rows.iter_mut().find(|b| b.cde_key == done.cde_key) {
+                        row.on_shelf = false;
+                        row.allowlisted = false;
+                        row.linked = mappings.contains_key(&done.cde_key);
+                    }
+                    self.synced = self.rows.iter().filter(|b| b.allowlisted).count();
+                    if let Ok(state) = State::load(Path::new(&CONFIG.state_path)) {
+                        self.last_sync = state.books.values().map(|b| b.last_synced_at).max();
+                    }
+                    if let Err(e) = menu::write_menu(Path::new(&CONFIG.cc_db_path)) {
+                        eprintln!("warning: could not update the KUAL menu: {e:#}");
+                    }
+                    self.note = Some(format!("{} {label}", t("Removed:", "Entfernt:")));
+                    if running {
+                        self.screen = Screen::Main;
+                        self.list_offset = 0;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("remove from StoryGraph failed: {e}");
+                    self.note = Some(classify_network_error(&e));
+                    if running {
+                        self.screen = Screen::Remove;
+                        self.list_offset = 0;
+                    }
+                }
+            }
+            true
         }
 
         fn tap_link_search(&mut self, row: i16, _col: i16) -> Tap {
@@ -1069,7 +1462,7 @@ mod imp {
                     self.screen = Screen::LinkPick;
                 }
                 Err(e) => {
-                    self.note = Some(classify_search_error(&e));
+                    self.note = Some(classify_network_error(&e));
                     self.screen = Screen::Link;
                 }
             }
@@ -1132,7 +1525,8 @@ mod imp {
             let allowlist = load_allowlist(Path::new(&CONFIG.allowlist_path));
             let state = State::load(Path::new(&CONFIG.state_path)).unwrap_or_default();
             let linked = menu::linked_keys(Path::new(&CONFIG.manual_mappings_path), &state);
-            let rows = crate::ui::build_rows(&snapshot, &allowlist, &linked);
+            let on_shelf = state.books.keys().cloned().collect();
+            let rows = crate::ui::build_rows(&snapshot, &allowlist, &linked, &on_shelf);
             let total = snapshot.len();
             let synced = rows.iter().filter(|b| b.allowlisted).count();
             let last_sync = state.books.values().map(|b| b.last_synced_at).max();
@@ -1155,6 +1549,8 @@ mod imp {
                 link_key: None,
                 candidates: Vec::new(),
                 search: None,
+                remove_key: None,
+                removing: None,
             },
             Err(e) => {
                 show_error(&fb, &format!("{e:#}"));
@@ -1180,7 +1576,9 @@ mod imp {
         let mut y = 0i32;
 
         loop {
-            if ui.drain_search() {
+            let searched = ui.drain_search();
+            let removed = ui.drain_remove();
+            if searched || removed {
                 ui.draw(false);
             }
 
@@ -1323,7 +1721,7 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_rows, pad_center, pad_right, settings_lines, truncate_chars};
+    use super::{build_rows, pad_center, pad_right, settings_lines, shelf_indices, truncate_chars};
     use crate::reader::{BookProgress, Status};
     use std::collections::{HashMap, HashSet};
 
@@ -1365,7 +1763,7 @@ mod tests {
         let allowlist: HashSet<String> = ["K1".to_owned()].into_iter().collect();
         let linked: HashMap<String, String> =
             [("K2".to_owned(), "sg-2".to_owned())].into_iter().collect();
-        let rows = build_rows(&snap, &allowlist, &linked);
+        let rows = build_rows(&snap, &allowlist, &linked, &HashSet::new());
         assert_eq!(rows.len(), 2);
         assert!(rows[0].allowlisted);
         assert!(!rows[0].linked);
@@ -1407,5 +1805,20 @@ mod tests {
         assert!(lines[6].contains("/a/map.ini"));
         assert!(lines[7].contains("allowlist"));
         assert!(lines[7].contains("/a/allow.ini"));
+    }
+
+    #[test]
+    fn shelf_indices_lists_only_synced_books() {
+        let snap = vec![
+            book("K1", "T1", "A1", 42.0),
+            book("K2", "T2", "A2", 90.0),
+            book("K3", "T3", "A3", 10.0),
+        ];
+        let on_shelf: HashSet<String> = ["K1".to_owned(), "K3".to_owned()].into_iter().collect();
+        let rows = build_rows(&snap, &HashSet::new(), &HashMap::new(), &on_shelf);
+        assert!(rows[0].on_shelf);
+        assert!(!rows[1].on_shelf);
+        assert_eq!(shelf_indices(&rows), vec![0, 2]);
+        assert!(shelf_indices(&rows[1..2]).is_empty());
     }
 }

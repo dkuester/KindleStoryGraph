@@ -175,8 +175,11 @@ Buch bleibt auf deinem StoryGraph-Regal. Um es wieder herunterzunehmen:
 2. Das Buch antippen. Dafür braucht es WLAN und gültige Cookies. Das Menü
    bleibt offen und das Buch verschwindet aus der Liste.
 
-Auf einem Rechner oder per SSH geht dasselbe mit
-`kindlestorygraph unsync <cde_key>`.
+In der Einstellungs-Oberfläche auf dem Gerät (**Open settings UI**) geht das
+über **Verknüpfen** → **Entfernen**: ein synchronisiertes Buch antippen und
+mit **Entfernen** bestätigen. Der Aufruf läuft im Hintergrund; **Zurück** lässt
+ihn weiterlaufen, das Ergebnis erscheint als Hinweis. Auf einem Rechner oder
+per SSH geht dasselbe mit `kindlestorygraph unsync <cde_key>`.
 
 Was passiert: Das Buch wird auf StoryGraph auf **to-read** gesetzt, danach aus
 `allowlist.ini` (damit der nächste Sync es nicht zurückholt) und aus
@@ -189,9 +192,12 @@ Einschränkungen:
 
 - Bei `sync_scope=all` wird das abgelehnt, weil der nächste Durchlauf das Buch
   wieder synchronisieren würde. Vorher auf `sync_scope=allowlist` umstellen.
-- Zurückgesetzt wird nur der Status. Ob StoryGraph beim Wechsel auf „to-read“
-  auch den gespeicherten Lesefortschritt verwirft, ist noch nicht geprüft; wenn
-  dir das wichtig ist, das Buch auf StoryGraph kontrollieren.
+- Zurückgesetzt wird nur der Status; das Buch bleibt auf deiner
+  „to-read“-Liste. StoryGraph blendet den Fortschrittsbalken auf der Buchseite
+  aus, aber dein **Lesetagebuch (Reading Journal) behält den Verlauf**
+  („Started reading“ und die Fortschritts-Einträge). Um auch den zu löschen,
+  auf der StoryGraph-Seite des Buchs **Remove book** verwenden (löscht
+  Leseverlauf und eine eventuelle Rezension).
 
 ## Hinweise & Einschränkungen
 

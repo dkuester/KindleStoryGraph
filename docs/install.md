@@ -165,6 +165,9 @@ on your StoryGraph shelf. To take it back off:
 2. Tap the book. It needs Wi-Fi and valid cookies. The menu stays open and the
    book drops out of the list.
 
+In the on-device settings UI (**Open settings UI**) the same is **Link** →
+**Remove**: tap a synced book, then confirm with **Remove**. The call runs in
+the background; **Back** leaves it running and the result shows up as a note.
 On a host or over SSH the same is `kindlestorygraph unsync <cde_key>`.
 
 What happens: the book is set to **to-read** on StoryGraph, then removed from
@@ -178,9 +181,11 @@ Limitations:
 
 - With `sync_scope=all` this is refused, because the next pass would sync the
   book again. Switch to `sync_scope=allowlist` first.
-- Only the status is reset. Whether StoryGraph also drops the stored reading
-  progress when a book goes back to "to-read" is not verified yet; check the
-  book on StoryGraph if that matters to you.
+- Only the status is reset, and the book stays on your "to-read" list.
+  StoryGraph hides the progress bar on the book page, but your **reading
+  journal keeps the history** ("Started reading" and the progress entries).
+  To erase that too, use **Remove book** on the book's StoryGraph page
+  (it deletes the reading history and any review).
 
 ## Notes & limitations
 
