@@ -1,13 +1,14 @@
 //! KUAL menu generation and StoryGraph match discovery.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::config::{self, CONFIG};
+use crate::fsutil::write_atomic;
 use crate::reader::Reader;
 use crate::state::State;
 use crate::storygraph;
@@ -39,13 +40,11 @@ impl SearchCache {
         serde_json::from_str(&content).with_context(|| format!("parsing {}", path.display()))
     }
 
+    /// Written atomically (see [`write_atomic`]): a torn cache would fail to
+    /// parse and break every menu render until it is deleted by hand.
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating parent dir of {}", path.display()))?;
-        }
-        let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))
+        let json = serde_json::to_vec_pretty(self)?;
+        write_atomic(path, &json).context("saving search cache")
     }
 }
 
@@ -262,7 +261,7 @@ pub fn render_with(
     (json!({ "items": items }), has_books)
 }
 
-/// Rendered menu → `CONFIG.menu_path`, via a temp file + rename so the
+/// Rendered menu → `CONFIG.menu_path`, written atomically so the
 /// launcher never reads a half-written file. Refuses to replace a good menu
 /// with an empty book list (a locked/unreadable `cc.db` must not wipe the
 /// selection the user sees).
@@ -274,15 +273,8 @@ pub fn write_menu(cc_db: &Path) -> Result<()> {
             CONFIG.menu_path
         );
     }
-    let path = Path::new(&CONFIG.menu_path);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent dir of {}", path.display()))?;
-    }
-    let tmp = PathBuf::from(format!("{}.tmp", CONFIG.menu_path));
-    std::fs::write(&tmp, serde_json::to_string_pretty(&menu)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))
+    let json = serde_json::to_vec_pretty(&menu)?;
+    write_atomic(Path::new(&CONFIG.menu_path), &json).context("writing KUAL menu")
 }
 
 /// Search StoryGraph for every unlinked book with progress and cache the top
@@ -363,6 +355,11 @@ mod tests {
         cache.save(&path).unwrap();
         let loaded = SearchCache::load(&path).unwrap();
         assert_eq!(loaded.books["KEY1"][0].id, "id-1");
+
+        // A smaller cache replaces the old one fully (no stale tail).
+        SearchCache::default().save(&path).unwrap();
+        assert!(SearchCache::load(&path).unwrap().books.is_empty());
+        assert!(!crate::fsutil::tmp_path(&path).exists());
         std::fs::remove_file(&path).ok();
     }
 

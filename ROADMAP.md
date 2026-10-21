@@ -55,6 +55,13 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
 - Per-book error isolation: a failing book is reported as `failed` and the pass
   continues; the state of the books synced before it is saved instead of being
   re-pushed on every pass. `sync` exits non-zero when any book failed.
+- Atomic writes everywhere: `allowlist.ini`, `manual_mappings.ini`,
+  `search_cache.json`, `menu.json`, `config.ini` and `state.json` all go
+  through one shared `write_atomic` (temp file → fsync → rename), so a suspend
+  or power cut mid-write can no longer truncate the allowlist and silently
+  stop the sync.
+- Log rotation: `start.sh` and `sync-once.sh` move `kindlestorygraph.log` to
+  `kindlestorygraph.log.1` once it exceeds 512 KiB (one old file kept).
 
 ## Quick wins
 
@@ -62,9 +69,7 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   Exclude `p_cdeType != "EBOK"` entries (e.g. the JAILBROKEN placeholder) from
   the KUAL selection menu and the `books` output. Effort: small.
 
-- **Log rotation**
-  Rotate `kindlestorygraph.log` by size so it doesn't grow unbounded.
-  Effort: small.
+- ~~**Log rotation**~~ — done (see Recently completed).
 
 - ~~**`doctor` command**~~ — done (see Recently completed).
 
