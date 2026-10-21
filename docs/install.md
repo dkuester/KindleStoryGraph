@@ -181,9 +181,11 @@ Limitations:
 
 - With `sync_scope=all` this is refused, because the next pass would sync the
   book again. Switch to `sync_scope=allowlist` first.
-- Only the status is reset. Whether StoryGraph also drops the stored reading
-  progress when a book goes back to "to-read" is not verified yet; check the
-  book on StoryGraph if that matters to you.
+- Only the status is reset, and the book stays on your "to-read" list.
+  StoryGraph hides the progress bar on the book page, but your **reading
+  journal keeps the history** ("Started reading" and the progress entries).
+  To erase that too, use **Remove book** on the book's StoryGraph page
+  (it deletes the reading history and any review).
 
 ## Notes & limitations
 

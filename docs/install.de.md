@@ -192,9 +192,12 @@ Einschränkungen:
 
 - Bei `sync_scope=all` wird das abgelehnt, weil der nächste Durchlauf das Buch
   wieder synchronisieren würde. Vorher auf `sync_scope=allowlist` umstellen.
-- Zurückgesetzt wird nur der Status. Ob StoryGraph beim Wechsel auf „to-read“
-  auch den gespeicherten Lesefortschritt verwirft, ist noch nicht geprüft; wenn
-  dir das wichtig ist, das Buch auf StoryGraph kontrollieren.
+- Zurückgesetzt wird nur der Status; das Buch bleibt auf deiner
+  „to-read“-Liste. StoryGraph blendet den Fortschrittsbalken auf der Buchseite
+  aus, aber dein **Lesetagebuch (Reading Journal) behält den Verlauf**
+  („Started reading“ und die Fortschritts-Einträge). Um auch den zu löschen,
+  auf der StoryGraph-Seite des Buchs **Remove book** verwenden (löscht
+  Leseverlauf und eine eventuelle Rezension).
 
 ## Hinweise & Einschränkungen
 

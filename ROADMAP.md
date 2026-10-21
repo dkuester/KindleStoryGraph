@@ -92,12 +92,17 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
 
 ## High priority
 
-- **Remove from StoryGraph: clear stored progress**
-  The first cut (see Recently completed) only resets the status to "to-read".
-  Unverified: whether StoryGraph keeps the stored progress / reading dates on
-  a to-read book. Check on a test account; if it does, find a clear-progress
-  (or remove-from-shelf) endpoint and call it from `unsync_book`. Blocker:
-  needs a check against a real StoryGraph account. Effort: medium.
+- **Remove from StoryGraph: also erase the reading history**
+  Verified on a real account (2026-10-21): "to-read" hides the progress bar on
+  the book page, but the book stays on the to-read list and the reading
+  journal keeps "Started reading" plus every progress entry. StoryGraph's own
+  "Remove book" erases it: `GET /books/<id>/check_tags` (JSON `has_tags`),
+  then `POST /remove-book/<id>?remove_tags=<bool>` with the page's CSRF token
+  as `X-CSRF-Token`, `Accept: text/javascript`, `X-Requested-With`. It also
+  deletes any review, so it should be an explicit choice (e.g. a second
+  "remove completely" action), not a silent replacement for "to-read".
+  Endpoint read from the web app's JS; the POST itself is not exercised yet.
+  Effort: medium.
 
 - ~~**Author-aware matching**~~ — done (see Recently completed).
 
