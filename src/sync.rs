@@ -138,8 +138,21 @@ fn remote_is_ahead(remote: &UserBook, percent: u32) -> bool {
     remote_is_read(remote) || remote.progress_percent > percent
 }
 
-/// Find the best StoryGraph match for a Kindle book by title, or `None` if no
-/// candidate clears the threshold.
+/// Find the best StoryGraph match for a Kindle book, or `None` if no
+/// candidate's title clears the threshold.
+///
+/// Only candidates whose title score alone clears `threshold` are eligible;
+/// those are ranked by [`storygraph::match_score`] (title score adjusted by
+/// author agreement), so of two same-title editions the one by the Kindle
+/// author wins. The author thus only reorders candidates: it never rescues a
+/// weak title nor rejects a lone title match (e.g. when StoryGraph credits a
+/// translator or spells the name differently).
+///
+/// The search query is the cleaned title only, unlike the human pick list in
+/// `menu::find_matches`: the title-only result set already contains the
+/// same-title editions to choose between, while appending the Kindle credit
+/// (often several authors, or "Last, First") risks StoryGraph returning no
+/// results at all for a book it does have.
 fn match_book<SG: StoryGraphClient>(
     sg: &SG,
     book: &BookProgress,
@@ -149,12 +162,15 @@ fn match_book<SG: StoryGraphClient>(
     let results = sg.search(query)?;
     let mut best: Option<(String, f32)> = None;
     for r in &results {
-        let score = storygraph::title_match_score(query, &r.title);
+        if storygraph::title_match_score(query, &r.title) < threshold {
+            continue;
+        }
+        let score = storygraph::match_score(query, &book.author, &r.title, &r.author);
         if best.as_ref().is_none_or(|(_, s)| score > *s) {
             best = Some((r.id.clone(), score));
         }
     }
-    Ok(best.filter(|(_, s)| *s >= threshold).map(|(id, _)| id))
+    Ok(best.map(|(id, _)| id))
 }
 
 /// Runs one sync pass: computes the diff between the cc.db snapshot and the
@@ -715,6 +731,194 @@ mod tests {
                 cde_key: "asin-dcc".to_owned(),
                 storygraph_id: "single".to_owned(),
                 percent: 23,
+            }]
+        );
+    }
+
+    fn candidate(id: &str, title: &str, author: &str) -> Book {
+        Book {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            author: author.to_owned(),
+            pages: 0,
+        }
+    }
+
+    fn mock_results(query: &str, books: Vec<Book>) -> Mock {
+        Mock {
+            results: HashMap::from([(query.to_owned(), books)]),
+            remote: HashMap::new(),
+            failing: vec![],
+            status_calls: RefCell::new(vec![]),
+            progress_calls: RefCell::new(vec![]),
+        }
+    }
+
+    fn attached_id(outcomes: &[Outcome]) -> Option<&str> {
+        match outcomes {
+            [Outcome::Attached { storygraph_id, .. }] => Some(storygraph_id),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn same_title_prefers_matching_author() {
+        // Wrong-author edition listed first: without the author it would win
+        // the tie on title score.
+        for order in [false, true] {
+            let mut books = vec![
+                candidate("wrong", "The Fall", "Albert Camus"),
+                candidate("right", "The Fall", "Martin, Michael A."),
+            ];
+            if order {
+                books.reverse();
+            }
+            let mock = mock_results("The Fall", books);
+            let mut snapshot = vec![book("asin1", "The Fall", 30.0, Status::CurrentlyReading)];
+            snapshot[0].author = "Andy Mangels, Michael A. Martin".to_owned();
+
+            let outcomes = sync_once(
+                &snapshot,
+                &mut State::default(),
+                CFG,
+                &mock,
+                &HashMap::new(),
+                false,
+            );
+            assert_eq!(attached_id(&outcomes), Some("right"));
+        }
+    }
+
+    #[test]
+    fn right_author_beats_slightly_better_title() {
+        let mock = mock_results(
+            "Titan Taking Wing",
+            vec![
+                candidate("wrong", "Titan Taking Wing", "Someone Else"),
+                candidate(
+                    "right",
+                    "Titan: Taking Wing (Star Trek)",
+                    "Michael A. Martin",
+                ),
+            ],
+        );
+        let mut snapshot = vec![book(
+            "asin1",
+            "Titan Taking Wing",
+            30.0,
+            Status::CurrentlyReading,
+        )];
+        snapshot[0].author = "Andy Mangels, Michael A. Martin".to_owned();
+
+        let outcomes = sync_once(
+            &snapshot,
+            &mut State::default(),
+            CFG,
+            &mock,
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(attached_id(&outcomes), Some("right"));
+    }
+
+    #[test]
+    fn unknown_author_keeps_title_only_behaviour() {
+        // Kindle author missing: best title wins regardless of result authors.
+        let mock = mock_results(
+            "Dune Messiah",
+            vec![
+                candidate("partial", "Dune", "Frank Herbert"),
+                candidate("exact", "Dune Messiah", "Someone Else"),
+            ],
+        );
+        let mut snapshot = vec![book(
+            "asin1",
+            "Dune Messiah",
+            30.0,
+            Status::CurrentlyReading,
+        )];
+        snapshot[0].author = String::new();
+        let outcomes = sync_once(
+            &snapshot,
+            &mut State::default(),
+            CFG,
+            &mock,
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(attached_id(&outcomes), Some("exact"));
+
+        // StoryGraph author unknown: no penalty, the title match still clears.
+        let mock = mock_results(
+            "Dune Messiah",
+            vec![candidate("only", "Dune Messiah", "Unknown Author")],
+        );
+        snapshot[0].author = "Frank Herbert".to_owned();
+        let outcomes = sync_once(
+            &snapshot,
+            &mut State::default(),
+            CFG,
+            &mock,
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(attached_id(&outcomes), Some("only"));
+    }
+
+    #[test]
+    fn wrong_author_lone_title_match_still_attaches() {
+        let mock = mock_results(
+            "Dune Messiah",
+            vec![candidate("only", "Dune Messiah", "Someone Else")],
+        );
+        let mut snapshot = vec![book(
+            "asin1",
+            "Dune Messiah",
+            30.0,
+            Status::CurrentlyReading,
+        )];
+        snapshot[0].author = "Frank Herbert".to_owned();
+        let outcomes = sync_once(
+            &snapshot,
+            &mut State::default(),
+            CFG,
+            &mock,
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(attached_id(&outcomes), Some("only"));
+    }
+
+    #[test]
+    fn author_does_not_lift_weak_title_over_threshold() {
+        // Title score 0.4 < 0.6: the matching author must not rescue it.
+        let mock = mock_results(
+            "Dune Messiah",
+            vec![candidate(
+                "weak",
+                "Dune Chronicles Collection",
+                "Frank Herbert",
+            )],
+        );
+        let mut snapshot = vec![book(
+            "asin1",
+            "Dune Messiah",
+            30.0,
+            Status::CurrentlyReading,
+        )];
+        snapshot[0].author = "Frank Herbert".to_owned();
+        let outcomes = sync_once(
+            &snapshot,
+            &mut State::default(),
+            CFG,
+            &mock,
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(
+            outcomes,
+            vec![Outcome::NoMatch {
+                cde_key: "asin1".to_owned()
             }]
         );
     }

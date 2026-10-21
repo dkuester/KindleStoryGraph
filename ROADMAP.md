@@ -62,6 +62,13 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   stop the sync.
 - Log rotation: `start.sh` and `sync-once.sh` move `kindlestorygraph.log` to
   `kindlestorygraph.log.1` once it exceeds 512 KiB (one old file kept).
+- Author-aware matching: the Kindle author (`j_credits`) now ranks the
+  automatic StoryGraph match. Authors are normalised (case, common diacritics,
+  "Last, First", several authors joined by "," / "&" / "and") and compared on
+  surnames; a match adds 0.15 to the title score, a clear mismatch subtracts
+  0.15, an unknown author on either side leaves the title score alone. The
+  threshold still applies to the title score only, so the author reorders
+  same-title editions but never rescues a weak title or vetoes a lone match.
 
 ## Quick wins
 
@@ -83,10 +90,7 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   progress if a clear-progress endpoint is reachable (blocker: unverified).
   Effort: medium. Mapping: `update_status(book_id, to-read)` already exists.
 
-- **Author-aware matching**
-  Matching currently scores title only; the `j_credits` author is read but
-  unused. Fold author similarity into the match score to disambiguate
-  same-title books. Effort: medium (well testable with the existing mock).
+- ~~**Author-aware matching**~~ — done (see Recently completed).
 
 - **Suspend/resume catch-up sync**
   After a suspend/resume cycle, run one immediate sync instead of waiting for
