@@ -767,6 +767,35 @@ pub fn update_status(book_id: &str, status_id: u8) -> Result<UserBook> {
     parse_user_book(book_id, &get(&format!("/books/{book_id}"))?)
 }
 
+/// Removes a book from the user's StoryGraph lists entirely — StoryGraph's own
+/// "Remove book". Unlike setting "to-read" this also deletes the reading
+/// history (journal: "Started reading", progress entries) **and any review**.
+///
+/// Mirrors the web app's `remove-book` controller: `GET
+/// /books/<id>/check_tags`, then `POST /remove-book/<id>?remove_tags=<bool>`
+/// with the CSRF token. Tags are kept when the book has any (they are the
+/// user's own organisation, not reading history); if the tag check fails we
+/// also keep them. Re-fetches the book page afterwards and fails if StoryGraph
+/// still lists a status for it.
+pub fn remove_book(book_id: &str) -> Result<()> {
+    require_credentials()?;
+    let (_html, data) = fetch_page_data(book_id)?;
+
+    let has_tags = get(&format!("/books/{book_id}/check_tags"))
+        .ok()
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+        .and_then(|v| v.get("has_tags").and_then(serde_json::Value::as_bool))
+        .unwrap_or(true);
+    let path = format!("/remove-book/{book_id}?remove_tags={}", !has_tags);
+    post_form(&path, &[("authenticity_token", data.csrf.as_str())])?;
+
+    let after = parse_user_book(book_id, &get(&format!("/books/{book_id}"))?)?;
+    if let Some(status) = after.status_id {
+        bail!("StoryGraph still lists book {book_id} (status {status}) after removing it");
+    }
+    Ok(())
+}
+
 /// Updates reading progress for a book. `progress_type` is `"percentage"` or `"pages"`.
 /// Fetches the book page first to extract the CSRF token and current page count.
 /// If the book has no reading status, automatically sets it to "Currently Reading" first.

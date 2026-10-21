@@ -9,6 +9,7 @@ use kindlestorygraph::menu;
 use kindlestorygraph::reader::{self, Reader};
 use kindlestorygraph::setup;
 use kindlestorygraph::storygraph::{self, parse_status_arg};
+use kindlestorygraph::sync::UnsyncMode;
 
 /// storygraph sync for the native Kindle reader.
 #[derive(FromArgs, PartialEq, Debug)]
@@ -205,6 +206,11 @@ struct Unsync {
     /// the Kindle content key (cde_key) of the book
     #[argh(positional)]
     cde_key: String,
+
+    /// remove the book from StoryGraph entirely instead: deletes its reading
+    /// history AND any review there (irreversible)
+    #[argh(switch)]
+    completely: bool,
 }
 
 /// print a health report: config, cc.db, allowlist, state, optional network.
@@ -368,17 +374,29 @@ fn run(cmd: Command) -> anyhow::Result<()> {
             }
         }
         Command::Unsync(u) => {
+            let mode = if u.completely {
+                UnsyncMode::Completely
+            } else {
+                UnsyncMode::ToRead
+            };
             let res = kindlestorygraph::sync::unsync_book(
                 &kindlestorygraph::sync::RealStoryGraph,
                 &u.cde_key,
                 Path::new(&CONFIG.state_path),
                 Path::new(&CONFIG.allowlist_path),
                 CONFIG.sync_all(),
+                mode,
             )?;
-            println!(
-                "Removed {} from StoryGraph ({} set to to-read).",
-                res.cde_key, res.storygraph_id
-            );
+            match res.mode {
+                UnsyncMode::ToRead => println!(
+                    "Removed {} from StoryGraph ({} set to to-read).",
+                    res.cde_key, res.storygraph_id
+                ),
+                UnsyncMode::Completely => println!(
+                    "Removed {} from StoryGraph completely ({}: reading history and review deleted).",
+                    res.cde_key, res.storygraph_id
+                ),
+            }
             if let Err(e) = menu::write_menu(Path::new(&CONFIG.cc_db_path)) {
                 eprintln!("warning: could not update the KUAL menu: {e:#}");
             }

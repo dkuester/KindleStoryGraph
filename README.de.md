@@ -35,7 +35,7 @@ tolino und nutzt dieselbe Logik für StoryGraph-Login, Buchzuordnung und Sync.
 | **Bücher selbst auswählen** | Standardmäßig per Allowlist: Die zu synchronisierenden Bücher wählst du im KUAL-Menü. `sync_scope=all` synchronisiert stattdessen alle. |
 | **Kein versehentlicher Start** | Bücher unter 2 % Fortschritt (der Sprung beim ersten Öffnen) werden ignoriert, bis du wirklich zu lesen beginnst. |
 | **Manuelle Zuordnung** | Ein Kindle-Buch einer StoryGraph-Ausgabe zuordnen, im KUAL-Menü („Find matches“ → „Link books“) oder in `manual_mappings.ini`. Verknüpfte Bücher tragen `[linked]`. |
-| **Von StoryGraph entfernen** | Ein schon synchronisiertes Buch soll doch privat bleiben? „Remove from StoryGraph“ im KUAL-Menü (oder `unsync <cde_key>`) setzt es auf StoryGraph auf „to-read“ zurück und synchronisiert es nicht mehr. |
+| **Von StoryGraph entfernen** | Ein schon synchronisiertes Buch soll doch privat bleiben? „Remove from StoryGraph“ im KUAL-Menü (oder `unsync <cde_key>`) setzt es auf StoryGraph auf „to-read“ zurück und synchronisiert es nicht mehr; „Remove completely“ löscht dort zusätzlich Leseverlauf und Rezension. |
 | **Schonend fürs Gerät** | Nur *Änderungen* am Fortschritt werden übertragen, gedrosselt pro Buch. Seltene Abfragen, nur mit WLAN, Standby wird respektiert. |
 | **Nur lesend** | Schreibt nie in `cc.db` oder in deine Bücher. |
 

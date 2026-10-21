@@ -79,6 +79,15 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
 - FBInk UI "Remove": Link → Remove lists the synced books; a confirm screen
   ("Remove … from StoryGraph?") runs `unsync_book` on a background thread, so
   the tap loop stays responsive and Back leaves it running.
+- "Remove completely": `unsync --completely`, a KUAL "Remove completely"
+  group (book → explicit "Yes, delete history + review" entry) and a second
+  warning screen in the FBInk UI call StoryGraph's own "Remove book"
+  (`GET /books/<id>/check_tags`, then `POST /remove-book/<id>?remove_tags=…`
+  with the CSRF token; tags are kept). Verified on a real account
+  (2026-10-21): "to-read" alone leaves the book on the to-read list and the
+  reading journal ("Started reading", progress entries) intact, while
+  "Remove book" leaves no status, progress or journal entry behind. It also
+  deletes any review, hence the separate, explicitly confirmed action.
 
 ## Quick wins
 
@@ -92,18 +101,19 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
 
 ## High priority
 
-- **Remove from StoryGraph: also erase the reading history**
-  Verified on a real account (2026-10-21): "to-read" hides the progress bar on
-  the book page, but the book stays on the to-read list and the reading
-  journal keeps "Started reading" plus every progress entry. StoryGraph's own
-  "Remove book" erases it: `GET /books/<id>/check_tags` (JSON `has_tags`),
-  then `POST /remove-book/<id>?remove_tags=<bool>` with the page's CSRF token
-  as `X-CSRF-Token`, `Accept: text/javascript`, `X-Requested-With`. It also
-  deletes any review, so it should be an explicit choice (e.g. a second
-  "remove completely" action), not a silent replacement for "to-read".
-  Exercised once on a test book (no tags, `remove_tags=true`): HTTP 200,
-  afterwards no status, no progress and no journal entries for the book.
-  Effort: medium.
+- **Verify "Remove from StoryGraph" / "Remove completely" end to end**
+  Host tests and the armv7 build pass, but two things are untested: the Rust
+  `storygraph::remove_book` against the live account (only the same request
+  from a Python script was run, on one test book), and the device flows.
+  Pick a throwaway book *without a review* (e.g. from `search`): attach it
+  (allowlist + "Sync now"), then on the Kindle run KUAL "Remove completely" →
+  book → "Yes, delete history + review", and check on StoryGraph that the
+  book has no status, progress or journal entry. Repeat via the FBInk UI
+  (Link → Remove → book → "Remove completely..." → Delete) and once with the
+  plain "Remove" (expect "to-read"; remove the book by hand afterwards).
+  On the device also check that the button rows fit (Remove / Cancel,
+  "Remove completely...") and that Back on "Removing..." keeps it running.
+  Effort: small.
 
 - ~~**Author-aware matching**~~ — done (see Recently completed).
 
