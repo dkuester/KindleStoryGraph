@@ -554,6 +554,138 @@ pub fn clean_title(title: &str) -> &str {
     base.trim_end().trim_end_matches('-').trim_end()
 }
 
+/// Normalised view of an author credit string for matching.
+///
+/// `tokens` holds every name word (lowercased, common Latin diacritics folded,
+/// punctuation split off, initials and connectors such as "and"/"&" dropped);
+/// `surnames` holds the last name word of each individual author.
+#[derive(Debug, PartialEq)]
+pub struct AuthorNames {
+    pub tokens: std::collections::HashSet<String>,
+    pub surnames: std::collections::HashSet<String>,
+}
+
+/// Folds the common accented Latin letters to ASCII (lowercase input). Cheap
+/// on purpose — no Unicode tables; anything else is kept as is.
+fn fold_diacritics(c: char) -> char {
+    match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' => 'a',
+        'ç' | 'ć' | 'č' => 'c',
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ę' | 'ě' => 'e',
+        'ì' | 'í' | 'î' | 'ï' | 'ī' => 'i',
+        'ñ' | 'ń' | 'ň' => 'n',
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ő' => 'o',
+        'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ů' | 'ű' => 'u',
+        'ý' | 'ÿ' => 'y',
+        'ł' => 'l',
+        'ř' => 'r',
+        'ś' | 'š' => 's',
+        'ź' | 'ż' | 'ž' => 'z',
+        'ß' => 's',
+        other => other,
+    }
+}
+
+/// Parses an author credit into [`AuthorNames`], or `None` when it carries no
+/// usable name (empty, or StoryGraph's "Unknown Author" placeholder).
+///
+/// Several authors may be joined by ",", ";", "&", "and" or "und"
+/// ("Andy Mangels, Michael A. Martin"). A single "Last, First" credit is
+/// recognised when the string has exactly one comma and the part before it is
+/// a single word ("Mangels, Andy"); its surname is then the part before the
+/// comma. Name suffixes ("Jr.", "III") are ignored when picking the surname.
+pub fn parse_authors(credit: &str) -> Option<AuthorNames> {
+    const CONNECTORS: &[&str] = &["and", "und", "with", "et"];
+    const SUFFIXES: &[&str] = &["jr", "sr", "ii", "iii", "iv", "phd", "md"];
+
+    let lower: String = credit.to_lowercase().chars().map(fold_diacritics).collect();
+    if lower.trim().is_empty() || lower.trim() == "unknown author" {
+        return None;
+    }
+
+    // Name words of one author segment, initials/connectors/suffixes dropped.
+    let words = |segment: &str| -> Vec<String> {
+        segment
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().count() > 1 && !CONNECTORS.contains(w) && !SUFFIXES.contains(w))
+            .map(str::to_owned)
+            .collect()
+    };
+
+    let comma_parts: Vec<&str> = lower.split(',').collect();
+    let last_first = comma_parts.len() == 2
+        && words(comma_parts[0]).len() == 1
+        && !words(comma_parts[1]).is_empty();
+
+    let mut tokens = std::collections::HashSet::new();
+    let mut surnames = std::collections::HashSet::new();
+    if last_first {
+        let surname = words(comma_parts[0]).remove(0);
+        tokens.extend(words(comma_parts[1]));
+        tokens.insert(surname.clone());
+        surnames.insert(surname);
+    } else {
+        // "&" / ";" / "," / " and " all separate authors.
+        let normalised = lower.replace(['&', ';'], ",");
+        for segment in normalised.split(',') {
+            for part in segment.split(" and ").flat_map(|s| s.split(" und ")) {
+                let w = words(part);
+                if let Some(last) = w.last() {
+                    surnames.insert(last.clone());
+                }
+                tokens.extend(w);
+            }
+        }
+    }
+
+    (!surnames.is_empty()).then_some(AuthorNames { tokens, surnames })
+}
+
+/// Compares a Kindle author credit with a StoryGraph search result's author.
+///
+/// Returns `None` when either side has no usable author (empty or "Unknown
+/// Author") — callers must then fall back to title-only matching. Otherwise
+/// returns `Some(true)` when a surname of either side appears among the other
+/// side's name words, which tolerates "Last, First" vs "First Last", missing
+/// middle initials, and StoryGraph listing only the first of several
+/// co-authors; `Some(false)` means the authors are clearly different.
+pub fn author_matches(kindle_author: &str, result_author: &str) -> Option<bool> {
+    let a = parse_authors(kindle_author)?;
+    let b = parse_authors(result_author)?;
+    Some(
+        a.surnames.iter().any(|s| b.tokens.contains(s))
+            || b.surnames.iter().any(|s| a.tokens.contains(s)),
+    )
+}
+
+/// How much an author match raises (and a clear mismatch lowers) a
+/// candidate's ranking score in [`match_score`].
+pub const AUTHOR_WEIGHT: f32 = 0.15;
+
+/// Ranking score for a search result: [`title_match_score`] adjusted by
+/// ±[`AUTHOR_WEIGHT`] when both authors are known and do / do not match, and
+/// left unchanged when either author is unknown.
+///
+/// Title stays the primary signal: with the weight at 0.15, a right-author
+/// candidate outranks a wrong-author one whose title scores up to 0.3 higher
+/// (e.g. 0.75 + 0.15 beats 1.0 − 0.15), but a large title gap still wins.
+/// Callers apply the acceptance threshold to the title score alone, so the
+/// author can reorder candidates but neither lift a weak title over the
+/// threshold nor veto a lone title match.
+pub fn match_score(
+    query_title: &str,
+    kindle_author: &str,
+    result_title: &str,
+    result_author: &str,
+) -> f32 {
+    let title = title_match_score(query_title, result_title);
+    match author_matches(kindle_author, result_author) {
+        Some(true) => title + AUTHOR_WEIGHT,
+        Some(false) => title - AUTHOR_WEIGHT,
+        None => title,
+    }
+}
+
 /// Fetches the current user's reading status and progress for a book.
 pub fn get_user_book(book_id: &str) -> Result<UserBook> {
     require_credentials()?;
@@ -795,6 +927,71 @@ mod tests {
             clean_title("Dungeon Crawler Carl: Dungeon Crawler Carl Book 1"),
             "Dungeon Crawler Carl"
         );
+    }
+
+    fn set(words: &[&str]) -> std::collections::HashSet<String> {
+        words.iter().map(|w| (*w).to_owned()).collect()
+    }
+
+    #[test]
+    fn parse_authors_multiple_and_initials() {
+        let a = parse_authors("Andy Mangels, Michael A. Martin").unwrap();
+        assert_eq!(a.surnames, set(&["mangels", "martin"]));
+        assert_eq!(a.tokens, set(&["andy", "mangels", "michael", "martin"]));
+
+        let b = parse_authors("Douglas Preston & Lincoln Child").unwrap();
+        assert_eq!(b.surnames, set(&["preston", "child"]));
+        let c = parse_authors("Douglas Preston and Lincoln Child").unwrap();
+        assert_eq!(b, c);
+    }
+
+    #[test]
+    fn parse_authors_last_first_and_diacritics() {
+        let a = parse_authors("Mangels, Andy").unwrap();
+        assert_eq!(a.surnames, set(&["mangels"]));
+        assert_eq!(a.tokens, set(&["andy", "mangels"]));
+
+        let b = parse_authors("Jo NESBØ").unwrap();
+        assert_eq!(b.surnames, set(&["nesbo"]));
+        let c = parse_authors("Martin Luther King, Jr.").unwrap();
+        assert!(c.surnames.contains("king"));
+    }
+
+    #[test]
+    fn parse_authors_unknown_is_none() {
+        assert_eq!(parse_authors(""), None);
+        assert_eq!(parse_authors("  "), None);
+        assert_eq!(parse_authors("Unknown Author"), None);
+    }
+
+    #[test]
+    fn author_matches_cases() {
+        // Order, case, diacritics, "Last, First".
+        assert_eq!(author_matches("Jo Nesbø", "NESBO, JO"), Some(true));
+        // StoryGraph lists only the first co-author.
+        assert_eq!(
+            author_matches("Andy Mangels, Michael A. Martin", "Andy Mangels"),
+            Some(true)
+        );
+        // Shared first name only is not a match.
+        assert_eq!(
+            author_matches("Michael A. Martin", "Michael Crichton"),
+            Some(false)
+        );
+        // Unknown on either side → no opinion.
+        assert_eq!(author_matches("", "Stephen King"), None);
+        assert_eq!(author_matches("Stephen King", "Unknown Author"), None);
+    }
+
+    #[test]
+    fn match_score_author_reorders_same_title() {
+        let right = match_score("It", "Stephen King", "It", "Stephen King");
+        let wrong = match_score("It", "Stephen King", "It", "Someone Else");
+        let unknown = match_score("It", "Stephen King", "It", "Unknown Author");
+        assert!(right > unknown && unknown > wrong);
+        assert!((unknown - 1.0).abs() < f32::EPSILON);
+        // Unknown Kindle author: plain title score.
+        assert!((match_score("It", "", "It", "Someone Else") - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
