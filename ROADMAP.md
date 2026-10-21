@@ -101,7 +101,8 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   as `X-CSRF-Token`, `Accept: text/javascript`, `X-Requested-With`. It also
   deletes any review, so it should be an explicit choice (e.g. a second
   "remove completely" action), not a silent replacement for "to-read".
-  Endpoint read from the web app's JS; the POST itself is not exercised yet.
+  Exercised once on a test book (no tags, `remove_tags=true`): HTTP 200,
+  afterwards no status, no progress and no journal entries for the book.
   Effort: medium.
 
 - ~~**Author-aware matching**~~ — done (see Recently completed).
