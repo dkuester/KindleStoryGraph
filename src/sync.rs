@@ -25,6 +25,9 @@ pub trait StoryGraphClient {
     fn user_book(&self, book_id: &str) -> Result<UserBook>;
     fn set_status(&self, book_id: &str, status_id: u8) -> Result<UserBook>;
     fn set_progress(&self, book_id: &str, percent: u32) -> Result<UserBook>;
+    /// Remove the book from the user's lists entirely (deletes the reading
+    /// history and any review).
+    fn remove_book(&self, book_id: &str) -> Result<()>;
 }
 
 /// The real client, delegating to the `storygraph` module.
@@ -42,6 +45,9 @@ impl StoryGraphClient for RealStoryGraph {
     }
     fn set_progress(&self, book_id: &str, percent: u32) -> Result<UserBook> {
         storygraph::update_progress(book_id, "percentage", percent)
+    }
+    fn remove_book(&self, book_id: &str) -> Result<()> {
+        storygraph::remove_book(book_id)
     }
 }
 
@@ -390,19 +396,33 @@ pub fn allowed_books(
     }
 }
 
+/// How [`unsync_book`] takes a book off StoryGraph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnsyncMode {
+    /// Reset the status to "to-read". The book stays on the to-read list and
+    /// StoryGraph's reading journal keeps the history (verified 2026-10-21).
+    ToRead,
+    /// StoryGraph's "Remove book": off every list, reading history **and any
+    /// review** deleted. Irreversible — only on an explicit user choice.
+    Completely,
+}
+
 /// Result of [`unsync_book`].
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Unsynced {
     pub cde_key: String,
     pub storygraph_id: String,
+    pub mode: UnsyncMode,
     /// Whether the book was on the allowlist (and has been removed from it).
     pub removed_from_allowlist: bool,
 }
 
 /// Takes a synced book back off the user's StoryGraph shelf ("Remove from
-/// StoryGraph"): resets its StoryGraph status to "to-read", then removes it
-/// from the allowlist (so the next pass does not re-attach it) and from the
-/// sync state.
+/// StoryGraph"): resets its StoryGraph status to "to-read" or, with
+/// [`UnsyncMode::Completely`], removes it from StoryGraph entirely (history
+/// and review deleted); then removes it from the allowlist (so the next pass
+/// does not re-attach it) and from the sync state.
 ///
 /// Order matters for failure: the StoryGraph call comes first and the local
 /// files are only touched once it succeeded, so a network error leaves
@@ -425,6 +445,7 @@ pub fn unsync_book<SG: StoryGraphClient>(
     state_path: &Path,
     allowlist_path: &Path,
     sync_all: bool,
+    mode: UnsyncMode,
 ) -> Result<Unsynced> {
     let cde_key = cde_key.trim();
     if sync_all {
@@ -445,7 +466,12 @@ pub fn unsync_book<SG: StoryGraphClient>(
         .into());
     };
 
-    sg.set_status(&storygraph_id, ReadingStatus::ToRead as u8)?;
+    match mode {
+        UnsyncMode::ToRead => {
+            sg.set_status(&storygraph_id, ReadingStatus::ToRead as u8)?;
+        }
+        UnsyncMode::Completely => sg.remove_book(&storygraph_id)?,
+    }
 
     // Allowlist before state: if the state save failed afterwards, the stale
     // entry is harmless (the book is no longer synced), whereas the reverse
@@ -457,6 +483,7 @@ pub fn unsync_book<SG: StoryGraphClient>(
     Ok(Unsynced {
         cde_key: cde_key.to_owned(),
         storygraph_id,
+        mode,
         removed_from_allowlist,
     })
 }
@@ -476,6 +503,7 @@ mod tests {
         failing: Vec<String>,
         status_calls: RefCell<Vec<(String, u8)>>,
         progress_calls: RefCell<Vec<(String, u32)>>,
+        remove_calls: RefCell<Vec<String>>,
     }
 
     impl Mock {
@@ -535,6 +563,11 @@ mod tests {
                 edition_format: String::new(),
             })
         }
+        fn remove_book(&self, book_id: &str) -> Result<()> {
+            self.fail_if_failing(book_id)?;
+            self.remove_calls.borrow_mut().push(book_id.to_owned());
+            Ok(())
+        }
     }
 
     fn book(cde_key: &str, title: &str, percent: f64, status: Status) -> BookProgress {
@@ -566,6 +599,7 @@ mod tests {
             failing: vec![],
             status_calls: RefCell::new(vec![]),
             progress_calls: RefCell::new(vec![]),
+            remove_calls: RefCell::new(vec![]),
         }
     }
 
@@ -806,6 +840,7 @@ mod tests {
             failing: vec![],
             status_calls: RefCell::new(vec![]),
             progress_calls: RefCell::new(vec![]),
+            remove_calls: RefCell::new(vec![]),
         };
         let snapshot = vec![book(
             "asin-dcc",
@@ -842,6 +877,7 @@ mod tests {
             failing: vec![],
             status_calls: RefCell::new(vec![]),
             progress_calls: RefCell::new(vec![]),
+            remove_calls: RefCell::new(vec![]),
         }
     }
 
@@ -1195,6 +1231,7 @@ mod tests {
             failing: vec!["sg-1".to_owned()],
             status_calls: RefCell::new(vec![]),
             progress_calls: RefCell::new(vec![]),
+            remove_calls: RefCell::new(vec![]),
         };
         let snapshot = vec![
             book("asin1", "Book One", 10.0, Status::CurrentlyReading),
@@ -1246,16 +1283,26 @@ mod tests {
         let (state_path, allowlist_path) = unsync_fixture("ok");
         let mock = mock_with("", "");
 
-        let res = unsync_book(&mock, "asin1", &state_path, &allowlist_path, false).unwrap();
+        let res = unsync_book(
+            &mock,
+            "asin1",
+            &state_path,
+            &allowlist_path,
+            false,
+            UnsyncMode::ToRead,
+        )
+        .unwrap();
 
         assert_eq!(
             res,
             Unsynced {
                 cde_key: "asin1".to_owned(),
                 storygraph_id: "sg-1".to_owned(),
+                mode: UnsyncMode::ToRead,
                 removed_from_allowlist: true,
             }
         );
+        assert!(mock.remove_calls.borrow().is_empty());
         assert_eq!(
             *mock.status_calls.borrow(),
             vec![("sg-1".to_owned(), ReadingStatus::ToRead as u8)]
@@ -1277,7 +1324,15 @@ mod tests {
         let state_before = std::fs::read_to_string(&state_path).unwrap();
         let mock = mock_with("", "");
 
-        let err = unsync_book(&mock, "nope", &state_path, &allowlist_path, false).unwrap_err();
+        let err = unsync_book(
+            &mock,
+            "nope",
+            &state_path,
+            &allowlist_path,
+            false,
+            UnsyncMode::ToRead,
+        )
+        .unwrap_err();
 
         assert!(user_error(&err).contains("has not been synced"));
         assert!(mock.status_calls.borrow().is_empty());
@@ -1296,7 +1351,15 @@ mod tests {
         let mut mock = mock_with("", "");
         mock.failing.push("sg-1".to_owned());
 
-        let err = unsync_book(&mock, "asin1", &state_path, &allowlist_path, false).unwrap_err();
+        let err = unsync_book(
+            &mock,
+            "asin1",
+            &state_path,
+            &allowlist_path,
+            false,
+            UnsyncMode::ToRead,
+        )
+        .unwrap_err();
 
         assert!(format!("{err:#}").contains("simulated failure"));
         assert_eq!(std::fs::read_to_string(&state_path).unwrap(), state_before);
@@ -1313,7 +1376,15 @@ mod tests {
         let state_before = std::fs::read_to_string(&state_path).unwrap();
         let mock = mock_with("", "");
 
-        let err = unsync_book(&mock, "asin1", &state_path, &allowlist_path, true).unwrap_err();
+        let err = unsync_book(
+            &mock,
+            "asin1",
+            &state_path,
+            &allowlist_path,
+            true,
+            UnsyncMode::ToRead,
+        )
+        .unwrap_err();
 
         assert!(user_error(&err).contains("sync_scope=all"));
         assert!(mock.status_calls.borrow().is_empty());
@@ -1328,7 +1399,15 @@ mod tests {
         let mock = mock_with("The Great Gatsby", "sg-1");
         // A manual mapping is kept on purpose — it must not re-attach either.
         let mappings = HashMap::from([("asin1".to_owned(), "sg-1".to_owned())]);
-        unsync_book(&mock, "asin1", &state_path, &allowlist_path, false).unwrap();
+        unsync_book(
+            &mock,
+            "asin1",
+            &state_path,
+            &allowlist_path,
+            false,
+            UnsyncMode::ToRead,
+        )
+        .unwrap();
         mock.status_calls.borrow_mut().clear();
 
         let snapshot = vec![book(
@@ -1346,6 +1425,59 @@ mod tests {
         assert!(mock.status_calls.borrow().is_empty());
         assert!(mock.progress_calls.borrow().is_empty());
         assert!(!state.books.contains_key("asin1"));
+        let _ = std::fs::remove_dir_all(state_path.parent().unwrap());
+    }
+
+    #[test]
+    fn unsync_completely_removes_the_book_instead_of_to_read() {
+        let (state_path, allowlist_path) = unsync_fixture("completely");
+        let mock = mock_with("", "");
+
+        let res = unsync_book(
+            &mock,
+            "asin1",
+            &state_path,
+            &allowlist_path,
+            false,
+            UnsyncMode::Completely,
+        )
+        .unwrap();
+
+        assert_eq!(res.mode, UnsyncMode::Completely);
+        assert_eq!(*mock.remove_calls.borrow(), vec!["sg-1".to_owned()]);
+        assert!(mock.status_calls.borrow().is_empty(), "no to-read on top");
+        let state = State::load(&state_path).unwrap();
+        assert!(!state.books.contains_key("asin1"));
+        assert_eq!(
+            std::fs::read_to_string(&allowlist_path).unwrap(),
+            "# mine\nasin2\n"
+        );
+        let _ = std::fs::remove_dir_all(state_path.parent().unwrap());
+    }
+
+    #[test]
+    fn unsync_completely_failure_leaves_local_files_untouched() {
+        let (state_path, allowlist_path) = unsync_fixture("completely_fail");
+        let state_before = std::fs::read_to_string(&state_path).unwrap();
+        let mut mock = mock_with("", "");
+        mock.failing.push("sg-1".to_owned());
+
+        let err = unsync_book(
+            &mock,
+            "asin1",
+            &state_path,
+            &allowlist_path,
+            false,
+            UnsyncMode::Completely,
+        )
+        .unwrap_err();
+
+        assert!(format!("{err:#}").contains("simulated failure"));
+        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), state_before);
+        assert_eq!(
+            std::fs::read_to_string(&allowlist_path).unwrap(),
+            "# mine\nasin1\nasin2\n"
+        );
         let _ = std::fs::remove_dir_all(state_path.parent().unwrap());
     }
 }

@@ -136,7 +136,7 @@ mod imp {
     use crate::reader::Reader;
     use crate::state::State;
     use crate::storygraph::Book;
-    use crate::sync::{RealStoryGraph, Unsynced, unsync_book};
+    use crate::sync::{RealStoryGraph, UnsyncMode, Unsynced, unsync_book};
 
     /// Pick a UI string by configured language (German when `language` is "de").
     fn t(en: &'static str, de: &'static str) -> &'static str {
@@ -346,8 +346,12 @@ mod imp {
         LinkPick,
         /// Pick a synced book to take off StoryGraph (scrollable).
         Remove,
-        /// "Remove <title> from StoryGraph?" with Remove / Cancel.
+        /// "Remove <title> from StoryGraph?" with Remove / Cancel, plus
+        /// "Remove completely" one row below.
         RemoveConfirm,
+        /// Second, explicit confirmation for StoryGraph's "Remove book"
+        /// (deletes reading history and review).
+        RemoveCompletelyConfirm,
         /// Remove running in the background; the tap loop polls for it.
         RemoveRunning,
     }
@@ -362,6 +366,7 @@ mod imp {
     struct RemovePending {
         rx: mpsc::Receiver<Result<Unsynced, String>>,
         label: String,
+        mode: UnsyncMode,
     }
 
     /// UI layout + mutable state for one session.
@@ -419,6 +424,7 @@ mod imp {
                 Screen::LinkPick => self.draw_link_pick(),
                 Screen::Remove => self.draw_remove(),
                 Screen::RemoveConfirm => self.draw_remove_confirm(),
+                Screen::RemoveCompletelyConfirm => self.draw_remove_completely_confirm(),
                 Screen::RemoveRunning => self.draw_remove_running(),
             }
             self.fb.refresh(flash);
@@ -1033,6 +1039,82 @@ mod imp {
             let cancel_label = t(" [ Cancel ]", " [ Abbrechen ]");
             let cancel_col = fb.cols as i16 - cancel_label.chars().count() as i16 - 2;
             fb.print(btn, cancel_col.max(0), cancel_label, false, false);
+            fb.print(
+                self.util_row(),
+                2,
+                t(" [ Remove completely... ]", " [ Komplett entfernen... ]"),
+                false,
+                false,
+            );
+            fb.print(
+                self.hint_row(),
+                2,
+                &pad_right(
+                    t(
+                        "Completely = also delete history + review",
+                        "Komplett = auch Verlauf + Rezension löschen",
+                    ),
+                    width,
+                ),
+                false,
+                false,
+            );
+        }
+
+        fn draw_remove_completely_confirm(&self) {
+            let fb = self.fb;
+            let width = fb.cols.saturating_sub(2);
+            fb.print(
+                TITLE_ROW,
+                0,
+                &pad_center("KindleStoryGraph", fb.cols),
+                true,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_1,
+                2,
+                &pad_right(t("Remove COMPLETELY?", "KOMPLETT entfernen?"), width),
+                true,
+                false,
+            );
+            fb.print(
+                STATUS_ROW_3,
+                2,
+                &pad_right(&self.remove_title(), width),
+                true,
+                false,
+            );
+            let lines: [&str; 4] = if de() {
+                [
+                    "Entfernt das Buch von StoryGraph und",
+                    "LÖSCHT dort Leseverlauf (Tagebuch)",
+                    "UND deine Rezension. Nicht",
+                    "rückgängig zu machen. Braucht WLAN.",
+                ]
+            } else {
+                [
+                    "Removes the book from StoryGraph and",
+                    "DELETES its reading history (journal)",
+                    "AND your review there. This cannot",
+                    "be undone. Needs Wi-Fi.",
+                ]
+            };
+            for (i, line) in lines.iter().enumerate() {
+                fb.print(
+                    SECTION_ROW + i as i16,
+                    2,
+                    &pad_right(line, width),
+                    false,
+                    false,
+                );
+            }
+
+            let btn = self.button_row();
+            fb.print(btn, 2, t(" [ Delete ]", " [ Löschen ]"), false, false);
+            let cancel_label = t(" [ Cancel ]", " [ Abbrechen ]");
+            let cancel_col = fb.cols as i16 - cancel_label.chars().count() as i16 - 2;
+            fb.print(btn, cancel_col.max(0), cancel_label, false, false);
         }
 
         fn draw_remove_running(&self) {
@@ -1099,6 +1181,7 @@ mod imp {
                 Screen::LinkPick => self.tap_link_pick(row, col),
                 Screen::Remove => self.tap_remove(row, col),
                 Screen::RemoveConfirm => self.tap_remove_confirm(row, col),
+                Screen::RemoveCompletelyConfirm => self.tap_remove_completely_confirm(row, col),
                 Screen::RemoveRunning => self.tap_remove_running(row, col),
             }
         }
@@ -1228,13 +1311,31 @@ mod imp {
         }
 
         fn tap_remove_confirm(&mut self, row: i16, col: i16) -> Tap {
+            if row == self.util_row() {
+                // Never removes directly: the irreversible variant has its
+                // own confirmation screen.
+                self.screen = Screen::RemoveCompletelyConfirm;
+                return Tap::Redraw;
+            }
             if row != self.button_row() {
                 return Tap::None;
             }
             if col < self.fb.cols as i16 / 2 {
-                self.start_remove();
+                self.start_remove(UnsyncMode::ToRead);
             } else {
                 self.screen = Screen::Remove;
+            }
+            Tap::Redraw
+        }
+
+        fn tap_remove_completely_confirm(&mut self, row: i16, col: i16) -> Tap {
+            if row != self.button_row() {
+                return Tap::None;
+            }
+            if col < self.fb.cols as i16 / 2 {
+                self.start_remove(UnsyncMode::Completely);
+            } else {
+                self.screen = Screen::RemoveConfirm;
             }
             Tap::Redraw
         }
@@ -1268,7 +1369,7 @@ mod imp {
 
         /// Run `unsync_book` on a background thread (network: the tap loop
         /// must stay responsive, and the HTTP client has no global timeout).
-        fn start_remove(&mut self) {
+        fn start_remove(&mut self, mode: UnsyncMode) {
             let Some(key) = self.remove_key.clone() else {
                 self.screen = Screen::Remove;
                 return;
@@ -1282,11 +1383,12 @@ mod imp {
                     Path::new(&CONFIG.state_path),
                     Path::new(&CONFIG.allowlist_path),
                     CONFIG.sync_all(),
+                    mode,
                 )
                 .map_err(|e| format!("{e:#}"));
                 let _ = tx.send(res);
             });
-            self.removing = Some(RemovePending { rx, label });
+            self.removing = Some(RemovePending { rx, label, mode });
             self.screen = Screen::RemoveRunning;
             self.note = None;
         }
@@ -1305,7 +1407,11 @@ mod imp {
                     Err(t("Remove failed (see log)", "Entfernen fehlgeschlagen (Log)").to_owned())
                 }
             };
-            let label = self.removing.take().map(|p| p.label).unwrap_or_default();
+            let (label, mode) = self
+                .removing
+                .take()
+                .map(|p| (p.label, p.mode))
+                .unwrap_or((String::new(), UnsyncMode::ToRead));
             let running = self.screen == Screen::RemoveRunning;
             match res {
                 Ok(done) => {
@@ -1324,7 +1430,11 @@ mod imp {
                     if let Err(e) = menu::write_menu(Path::new(&CONFIG.cc_db_path)) {
                         eprintln!("warning: could not update the KUAL menu: {e:#}");
                     }
-                    self.note = Some(format!("{} {label}", t("Removed:", "Entfernt:")));
+                    let done_label = match mode {
+                        UnsyncMode::ToRead => t("Removed:", "Entfernt:"),
+                        UnsyncMode::Completely => t("Deleted:", "Gelöscht:"),
+                    };
+                    self.note = Some(format!("{done_label} {label}"));
                     if running {
                         self.screen = Screen::Main;
                         self.list_offset = 0;

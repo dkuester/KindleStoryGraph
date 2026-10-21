@@ -184,8 +184,21 @@ Limitations:
 - Only the status is reset, and the book stays on your "to-read" list.
   StoryGraph hides the progress bar on the book page, but your **reading
   journal keeps the history** ("Started reading" and the progress entries).
-  To erase that too, use **Remove book** on the book's StoryGraph page
-  (it deletes the reading history and any review).
+  To erase that too, use **Remove completely** (below).
+
+### Remove completely (deletes history and review)
+
+This uses StoryGraph's own **Remove book**: the book disappears from all your
+StoryGraph lists, and StoryGraph **deletes its reading history (journal) and
+any review you wrote**. This cannot be undone. Your tags on the book are kept.
+Locally it does the same as above (allowlist and `state.json`; the manual
+mapping is kept).
+
+- KUAL: **Remove completely (N) - deletes history + review** → tap the book →
+  tap **Yes, delete history + review**. The second tap is the confirmation.
+- Settings UI: **Link** → **Remove** → book → **Remove completely...** → a
+  second warning screen → **Delete**.
+- CLI: `kindlestorygraph unsync --completely <cde_key>`.
 
 ## Notes & limitations
 

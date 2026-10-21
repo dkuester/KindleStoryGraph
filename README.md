@@ -36,7 +36,7 @@ logic.
 | **Choose your books** | Opt-in allowlist by default: pick the books to sync in the KUAL menu. `sync_scope=all` syncs every book instead. |
 | **No accidental starts** | Books below 2 % progress (the Kindle's first-open jump) are ignored until you really start reading. |
 | **Manual matching** | Link a Kindle book to a StoryGraph edition from the KUAL menu ("Find matches" → "Link books") or in `manual_mappings.ini`. Linked books are marked `[linked]`. |
-| **Remove from StoryGraph** | Changed your mind about a synced book? "Remove from StoryGraph" in the KUAL menu (or `unsync <cde_key>`) resets it to "to-read" on StoryGraph and stops syncing it. |
+| **Remove from StoryGraph** | Changed your mind about a synced book? "Remove from StoryGraph" in the KUAL menu (or `unsync <cde_key>`) resets it to "to-read" on StoryGraph and stops syncing it; "Remove completely" also deletes its reading history and review there. |
 | **Light on the device** | Only progress *changes* are pushed, throttled per book. Polling is sparse, waits for Wi-Fi and respects suspend. |
 | **Read-only** | Never writes to `cc.db` or your books. |
 

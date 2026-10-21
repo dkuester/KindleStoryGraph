@@ -209,6 +209,26 @@ pub fn render_with(
         })
         .collect();
 
+    // The irreversible variant gets a confirmation step: book → submenu whose
+    // only entry says what is deleted. KUAL has no dialogs, so the extra tap
+    // (plus the explicit label) is the confirmation.
+    let remove_completely_items: Vec<Value> = snapshot
+        .iter()
+        .filter(|b| on_shelf.contains(&b.cde_key))
+        .map(|b| {
+            json!({
+                "name": b.title,
+                "items": [json!({
+                    "name": "Yes, delete history + review",
+                    "action": "bin/remove-completely.sh",
+                    "params": b.cde_key,
+                    "exitmenu": false,
+                    "refresh": true,
+                })],
+            })
+        })
+        .collect();
+
     let status_line = if !cookies_set {
         "Cookies not set — run setup on a computer".to_owned()
     } else {
@@ -289,6 +309,16 @@ pub fn render_with(
             "name": format!("Remove from StoryGraph ({})", unsync_items.len()),
             "priority": 9,
             "items": unsync_items,
+        }));
+    }
+    if !remove_completely_items.is_empty() {
+        items.push(json!({
+            "name": format!(
+                "Remove completely ({}) - deletes history + review",
+                remove_completely_items.len()
+            ),
+            "priority": 10,
+            "items": remove_completely_items,
         }));
     }
 
@@ -733,6 +763,53 @@ mod tests {
                 .iter()
                 .any(|e| e["action"] == "bin/unsync-book.sh")
         );
+
+        std::fs::remove_file(&db).ok();
+    }
+
+    #[test]
+    fn remove_completely_needs_a_confirming_second_tap() {
+        let db = temp_cc_db(
+            "ksg_test_menu_cc8.db",
+            &[("KEY1", "Dune", 42.0), ("KEY2", "Emma", 88.0)],
+        );
+        let synced = HashSet::from(["KEY1".to_owned()]);
+
+        let (menu, _) = render_with(
+            &db,
+            &HashSet::new(),
+            &HashMap::new(),
+            &synced,
+            &SearchCache::default(),
+            None,
+            true,
+        );
+        let group = menu["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| {
+                g["name"]
+                    .as_str()
+                    .is_some_and(|n| n.starts_with("Remove completely"))
+            })
+            .expect("remove-completely group");
+        assert_eq!(
+            group["name"],
+            "Remove completely (1) - deletes history + review"
+        );
+        let books = group["items"].as_array().unwrap();
+        assert_eq!(books.len(), 1, "only synced books are offered");
+        // The book itself is a submenu (no action): tapping it only opens the
+        // confirmation entry.
+        assert_eq!(books[0]["name"], "Dune");
+        assert!(books[0].get("action").is_none());
+        let confirm = &books[0]["items"][0];
+        assert_eq!(confirm["name"], "Yes, delete history + review");
+        assert_eq!(confirm["action"], "bin/remove-completely.sh");
+        assert_eq!(confirm["params"], "KEY1");
+        assert_eq!(confirm["exitmenu"], false);
+        assert_eq!(confirm["refresh"], true);
 
         std::fs::remove_file(&db).ok();
     }

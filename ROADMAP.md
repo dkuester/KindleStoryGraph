@@ -79,6 +79,15 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
 - FBInk UI "Remove": Link → Remove lists the synced books; a confirm screen
   ("Remove … from StoryGraph?") runs `unsync_book` on a background thread, so
   the tap loop stays responsive and Back leaves it running.
+- "Remove completely": `unsync --completely`, a KUAL "Remove completely"
+  group (book → explicit "Yes, delete history + review" entry) and a second
+  warning screen in the FBInk UI call StoryGraph's own "Remove book"
+  (`GET /books/<id>/check_tags`, then `POST /remove-book/<id>?remove_tags=…`
+  with the CSRF token; tags are kept). Verified on a real account
+  (2026-10-21): "to-read" alone leaves the book on the to-read list and the
+  reading journal ("Started reading", progress entries) intact, while
+  "Remove book" leaves no status, progress or journal entry behind. It also
+  deletes any review, hence the separate, explicitly confirmed action.
 
 ## Quick wins
 
@@ -91,19 +100,6 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
 - ~~**`doctor` command**~~ — done (see Recently completed).
 
 ## High priority
-
-- **Remove from StoryGraph: also erase the reading history**
-  Verified on a real account (2026-10-21): "to-read" hides the progress bar on
-  the book page, but the book stays on the to-read list and the reading
-  journal keeps "Started reading" plus every progress entry. StoryGraph's own
-  "Remove book" erases it: `GET /books/<id>/check_tags` (JSON `has_tags`),
-  then `POST /remove-book/<id>?remove_tags=<bool>` with the page's CSRF token
-  as `X-CSRF-Token`, `Accept: text/javascript`, `X-Requested-With`. It also
-  deletes any review, so it should be an explicit choice (e.g. a second
-  "remove completely" action), not a silent replacement for "to-read".
-  Exercised once on a test book (no tags, `remove_tags=true`): HTTP 200,
-  afterwards no status, no progress and no journal entries for the book.
-  Effort: medium.
 
 - ~~**Author-aware matching**~~ — done (see Recently completed).
 

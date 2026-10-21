@@ -196,8 +196,22 @@ Einschränkungen:
   „to-read“-Liste. StoryGraph blendet den Fortschrittsbalken auf der Buchseite
   aus, aber dein **Lesetagebuch (Reading Journal) behält den Verlauf**
   („Started reading“ und die Fortschritts-Einträge). Um auch den zu löschen,
-  auf der StoryGraph-Seite des Buchs **Remove book** verwenden (löscht
-  Leseverlauf und eine eventuelle Rezension).
+  **Komplett entfernen** verwenden (siehe unten).
+
+### Komplett entfernen (löscht Verlauf und Rezension)
+
+Das nutzt StoryGraphs eigenes **Remove book**: Das Buch verschwindet von allen
+deinen StoryGraph-Listen, und StoryGraph **löscht seinen Leseverlauf (Tagebuch)
+und eine eventuell geschriebene Rezension**. Das ist nicht rückgängig zu
+machen. Deine Tags am Buch bleiben erhalten. Lokal passiert dasselbe wie oben
+(Allowlist und `state.json`; die manuelle Zuordnung bleibt).
+
+- KUAL: **Remove completely (N) - deletes history + review** → Buch antippen →
+  **Yes, delete history + review** antippen. Der zweite Tipp ist die
+  Bestätigung.
+- Einstellungs-Oberfläche: **Verknüpfen** → **Entfernen** → Buch →
+  **Komplett entfernen...** → ein zweiter Warnbildschirm → **Löschen**.
+- CLI: `kindlestorygraph unsync --completely <cde_key>`.
 
 ## Hinweise & Einschränkungen
 
