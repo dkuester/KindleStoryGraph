@@ -175,8 +175,11 @@ Buch bleibt auf deinem StoryGraph-Regal. Um es wieder herunterzunehmen:
 2. Das Buch antippen. Dafür braucht es WLAN und gültige Cookies. Das Menü
    bleibt offen und das Buch verschwindet aus der Liste.
 
-Auf einem Rechner oder per SSH geht dasselbe mit
-`kindlestorygraph unsync <cde_key>`.
+In der Einstellungs-Oberfläche auf dem Gerät (**Open settings UI**) geht das
+über **Verknüpfen** → **Entfernen**: ein synchronisiertes Buch antippen und
+mit **Entfernen** bestätigen. Der Aufruf läuft im Hintergrund; **Zurück** lässt
+ihn weiterlaufen, das Ergebnis erscheint als Hinweis. Auf einem Rechner oder
+per SSH geht dasselbe mit `kindlestorygraph unsync <cde_key>`.
 
 Was passiert: Das Buch wird auf StoryGraph auf **to-read** gesetzt, danach aus
 `allowlist.ini` (damit der nächste Sync es nicht zurückholt) und aus

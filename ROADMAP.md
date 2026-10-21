@@ -76,7 +76,9 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   (under the state lock). Local files are only touched after the StoryGraph
   call succeeded; a manual mapping is kept so re-enabling links the same
   edition; refused with `sync_scope=all` (the next pass would re-attach it).
-  Not in the FBInk UI yet.
+- FBInk UI "Remove": Link → Remove lists the synced books; a confirm screen
+  ("Remove … from StoryGraph?") runs `unsync_book` on a background thread, so
+  the tap loop stays responsive and Back leaves it running.
 
 ## Quick wins
 
@@ -94,8 +96,8 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   The first cut (see Recently completed) only resets the status to "to-read".
   Unverified: whether StoryGraph keeps the stored progress / reading dates on
   a to-read book. Check on a test account; if it does, find a clear-progress
-  (or remove-from-shelf) endpoint and call it from `unsync_book`. Optional:
-  a "Remove" action in the FBInk UI (needs a confirm step). Effort: medium.
+  (or remove-from-shelf) endpoint and call it from `unsync_book`. Blocker:
+  needs a check against a real StoryGraph account. Effort: medium.
 
 - ~~**Author-aware matching**~~ — done (see Recently completed).
 

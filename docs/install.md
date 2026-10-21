@@ -165,6 +165,9 @@ on your StoryGraph shelf. To take it back off:
 2. Tap the book. It needs Wi-Fi and valid cookies. The menu stays open and the
    book drops out of the list.
 
+In the on-device settings UI (**Open settings UI**) the same is **Link** →
+**Remove**: tap a synced book, then confirm with **Remove**. The call runs in
+the background; **Back** leaves it running and the result shows up as a note.
 On a host or over SSH the same is `kindlestorygraph unsync <cde_key>`.
 
 What happens: the book is set to **to-read** on StoryGraph, then removed from
