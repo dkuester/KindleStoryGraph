@@ -6,6 +6,10 @@
 packaging/extension/bin/kindlestorygraph
 packaging/extension/config_example.ini
 
+# Release zips are built by .github/workflows/release.yml and attached to
+# the release, never committed
+*-kual.zip
+
 # local runtime artifacts (device state, secrets, logs)
 *.log
 state.json

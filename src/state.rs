@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -9,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::error::UserError;
+use crate::fsutil::write_atomic;
 
 /// Per-book sync state, keyed by Kindle `p_cdeKey`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -27,27 +27,12 @@ pub struct State {
     pub books: HashMap<String, BookState>,
 }
 
-fn tmp_path(path: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.tmp", path.display()))
-}
-
 fn corrupt_archive_path(path: &Path) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     PathBuf::from(format!("{}.corrupt-{stamp}", path.display()))
-}
-
-/// fsync the containing directory so the rename itself is durable. Not
-/// supported on vfat (`/mnt/us`), where opening the directory for fsync fails —
-/// best effort, failures are ignored on purpose.
-fn sync_parent_dir(path: &Path) {
-    if let Some(parent) = path.parent()
-        && let Ok(dir) = File::open(parent)
-    {
-        let _ = dir.sync_all();
-    }
 }
 
 impl State {
@@ -93,25 +78,8 @@ impl State {
     /// or power cut mid-write can then never leave a partial JSON file behind
     /// (worst case the `.tmp` file survives and the previous state stays valid).
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating parent dir of {}", path.display()))?;
-        }
-        let tmp = tmp_path(path);
         let json = serde_json::to_vec_pretty(self)?;
-        {
-            let mut file = File::create(&tmp)
-                .with_context(|| format!("creating temp state file {}", tmp.display()))?;
-            file.write_all(&json)
-                .with_context(|| format!("writing {}", tmp.display()))?;
-            // The content has to reach the medium before the rename is visible.
-            file.sync_all()
-                .with_context(|| format!("flushing {}", tmp.display()))?;
-        }
-        fs::rename(&tmp, path)
-            .with_context(|| format!("replacing {} with {}", path.display(), tmp.display()))?;
-        sync_parent_dir(path);
-        Ok(())
+        write_atomic(path, &json).context("saving sync state")
     }
 }
 
@@ -207,6 +175,7 @@ impl StateLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fsutil::tmp_path;
 
     fn state_with(entries: &[(&str, &str, f64)]) -> State {
         let mut s = State::default();

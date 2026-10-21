@@ -5,6 +5,7 @@
 pub mod config;
 pub mod daemon;
 pub mod error;
+pub mod fsutil;
 pub mod menu;
 pub mod reader;
 pub mod setup;

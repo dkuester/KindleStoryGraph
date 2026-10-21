@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
+
+use crate::fsutil::write_atomic;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -178,7 +179,8 @@ pub fn toggle_allowlist(path: &Path, key: &str) -> Result<bool> {
         out.push_str(key);
     }
     out.push('\n');
-    fs::write(path, &out).with_context(|| format!("writing allowlist at {}", path.display()))?;
+    write_atomic(path, out.as_bytes())
+        .with_context(|| format!("writing allowlist at {}", path.display()))?;
     Ok(!present)
 }
 
@@ -203,15 +205,15 @@ pub fn add_manual_mapping(path: &Path, cde_key: &str, storygraph_id: &str) -> Re
     out.push('=');
     out.push_str(storygraph_id.trim());
     out.push('\n');
-    fs::write(path, &out)
+    write_atomic(path, out.as_bytes())
         .with_context(|| format!("writing manual mappings at {}", path.display()))?;
     Ok(())
 }
 
 /// Writes `updates` into a bare `key=value` INI file: an existing key's value
 /// is replaced in place, a missing key is appended at the end. Comments, blank
-/// lines and unrelated keys are preserved. Written atomically (temp + fsync +
-/// rename) so a suspend mid-write can't leave a truncated config.
+/// lines and unrelated keys are preserved. Written atomically (see
+/// [`write_atomic`]) so a suspend mid-write can't leave a truncated config.
 pub fn set_ini_keys(path: &Path, updates: &[(&str, &str)]) -> Result<()> {
     let existing = fs::read_to_string(path).unwrap_or_default();
     let mut out: Vec<String> = Vec::new();
@@ -248,19 +250,7 @@ pub fn set_ini_keys(path: &Path, updates: &[(&str, &str)]) -> Result<()> {
     }
 
     let content = format!("{}\n", out.join("\n"));
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent dir of {}", path.display()))?;
-    }
-    let tmp = PathBuf::from(format!("{}.tmp", path.display()));
-    {
-        let mut file = File::create(&tmp).with_context(|| format!("creating {tmp:?}"))?;
-        file.write_all(content.as_bytes())
-            .with_context(|| format!("writing {tmp:?}"))?;
-        file.sync_all()
-            .with_context(|| format!("flushing {tmp:?}"))?;
-    }
-    fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))
+    write_atomic(path, content.as_bytes())
 }
 
 /// Resolves the config path: the `KINDLE_STORYGRAPH_CONFIG` env var if set
@@ -299,6 +289,7 @@ pub static CONFIG: LazyLock<Config> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fsutil::tmp_path;
 
     #[test]
     fn parses_bare_key_value_pairs() {
@@ -383,6 +374,63 @@ mod tests {
         let m = load_manual_mappings(&path);
         assert_eq!(m["KEY1"], "id-9");
         assert_eq!(m["KEY2"], "id-2");
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn toggle_allowlist_writes_atomically_and_keeps_comments() {
+        let path = std::env::temp_dir().join(format!(
+            "ksg_test_allowlist_atomic_{}.ini",
+            std::process::id()
+        ));
+        fs::write(&path, "# my books\n; second comment\nB0001\nB0002=1\n").unwrap();
+
+        assert!(toggle_allowlist(&path, "B0003").unwrap());
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# my books\n; second comment\nB0001\nB0002=1\nB0003\n"
+        );
+        assert!(!toggle_allowlist(&path, "B0001").unwrap());
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# my books\n; second comment\nB0002=1\nB0003\n"
+        );
+        assert!(!tmp_path(&path).exists(), "temp file must be renamed away");
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn add_manual_mapping_writes_atomically_and_keeps_comments() {
+        let path = std::env::temp_dir().join(format!(
+            "ksg_test_mappings_atomic_{}.ini",
+            std::process::id()
+        ));
+        fs::write(&path, "# cde_key = storygraph_id\nKEY1=id-1\nKEY2=id-2\n").unwrap();
+
+        add_manual_mapping(&path, "KEY1", "id-9").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# cde_key = storygraph_id\nKEY2=id-2\nKEY1=id-9\n"
+        );
+        assert!(!tmp_path(&path).exists(), "temp file must be renamed away");
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn set_ini_keys_writes_atomically_and_keeps_comments() {
+        let path =
+            std::env::temp_dir().join(format!("ksg_test_set_ini_{}.ini", std::process::id()));
+        fs::write(&path, "# config\nuser_slug=old\ndebug=false\n").unwrap();
+
+        set_ini_keys(&path, &[("user_slug", "new"), ("language", "de")]).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# config\nuser_slug=new\ndebug=false\nlanguage=de\n"
+        );
+        assert!(!tmp_path(&path).exists(), "temp file must be renamed away");
 
         fs::remove_file(&path).ok();
     }

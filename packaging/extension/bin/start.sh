@@ -18,4 +18,7 @@ fi
 # sync pass, or (when start.sh is invoked by its full path) this very shell.
 pkill -f "kindlestorygraph daemon" 2>/dev/null
 
+# Keep the log bounded (> 512 KiB → kindlestorygraph.log.1, one old file).
+"$EXT/bin/rotate-log.sh" "$LOG"
+
 nohup "$EXT/bin/kindlestorygraph" daemon >> "$LOG" 2>&1 &
