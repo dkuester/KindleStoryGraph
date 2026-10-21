@@ -90,10 +90,18 @@ fn render(cc_db: &Path) -> (Value, bool) {
     let cache = SearchCache::load(Path::new(&CONFIG.search_cache_path)).unwrap_or_default();
     let last_sync_at = state.books.values().map(|b| b.last_synced_at).max();
     let cookies_set = !CONFIG.session_cookie.is_empty();
+    // With sync_scope=all `unsync` is refused (the next pass would re-attach
+    // the book), so the group is not offered at all.
+    let on_shelf: HashSet<String> = if CONFIG.sync_all() {
+        HashSet::new()
+    } else {
+        state.books.keys().cloned().collect()
+    };
     render_with(
         cc_db,
         &allowlist,
         &linked,
+        &on_shelf,
         &cache,
         last_sync_at,
         cookies_set,
@@ -101,10 +109,13 @@ fn render(cc_db: &Path) -> (Value, bool) {
 }
 
 /// `render` with its inputs injected (testable without touching `CONFIG`).
+/// `on_shelf` are the books in `state.json`, i.e. the ones actually on the
+/// user's StoryGraph shelf (offered under "Remove from StoryGraph").
 pub fn render_with(
     cc_db: &Path,
     allowlist: &HashSet<String>,
     linked: &HashMap<String, String>,
+    on_shelf: &HashSet<String>,
     cache: &SearchCache,
     last_sync_at: Option<i64>,
     cookies_set: bool,
@@ -182,6 +193,22 @@ pub fn render_with(
         }));
     }
 
+    // Same one-process contract as the toggle: unsync rewrites menu.json
+    // before KUAL Next re-reads it, and the book drops out of this group.
+    let unsync_items: Vec<Value> = snapshot
+        .iter()
+        .filter(|b| on_shelf.contains(&b.cde_key))
+        .map(|b| {
+            json!({
+                "name": b.title,
+                "action": "bin/unsync-book.sh",
+                "params": b.cde_key,
+                "exitmenu": false,
+                "refresh": true,
+            })
+        })
+        .collect();
+
     let status_line = if !cookies_set {
         "Cookies not set — run setup on a computer".to_owned()
     } else {
@@ -257,6 +284,13 @@ pub fn render_with(
         "priority": 8,
         "action": "bin/ui.sh",
     }));
+    if !unsync_items.is_empty() {
+        items.push(json!({
+            "name": format!("Remove from StoryGraph ({})", unsync_items.len()),
+            "priority": 9,
+            "items": unsync_items,
+        }));
+    }
 
     (json!({ "items": items }), has_books)
 }
@@ -468,6 +502,7 @@ mod tests {
             &db,
             &allowlist,
             &HashMap::new(),
+            &HashSet::new(),
             &SearchCache::default(),
             None,
             false,
@@ -504,6 +539,7 @@ mod tests {
             &db,
             &allowlist,
             &linked,
+            &HashSet::new(),
             &SearchCache::default(),
             None,
             false,
@@ -532,7 +568,15 @@ mod tests {
             }],
         );
 
-        let (menu, _) = render_with(&db, &HashSet::new(), &HashMap::new(), &cache, None, false);
+        let (menu, _) = render_with(
+            &db,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &cache,
+            None,
+            false,
+        );
         let link = all_entries(&menu)
             .into_iter()
             .find(|e| e["action"] == "bin/link-book.sh")
@@ -553,6 +597,7 @@ mod tests {
             &missing,
             &HashSet::new(),
             &HashMap::new(),
+            &HashSet::new(),
             &SearchCache::default(),
             None,
             false,
@@ -576,6 +621,7 @@ mod tests {
             &db,
             &HashSet::new(),
             &HashMap::new(),
+            &HashSet::new(),
             &SearchCache::default(),
             Some(1_700_000_000),
             true,
@@ -591,6 +637,7 @@ mod tests {
             &db,
             &HashSet::new(),
             &HashMap::new(),
+            &HashSet::new(),
             &SearchCache::default(),
             None,
             false,
@@ -617,12 +664,75 @@ mod tests {
             &db,
             &allowlist,
             &HashMap::new(),
+            &HashSet::new(),
             &SearchCache::default(),
             None,
             false,
         );
         let header = &menu["items"][1]["name"];
         assert_eq!(header, "Sync selection (1/2)");
+
+        std::fs::remove_file(&db).ok();
+    }
+
+    #[test]
+    fn remove_group_lists_synced_books_and_keeps_the_menu_open() {
+        let db = temp_cc_db(
+            "ksg_test_menu_cc6.db",
+            &[("KEY1", "Dune", 42.0), ("KEY2", "Emma", 88.0)],
+        );
+        let synced = HashSet::from(["KEY1".to_owned()]);
+
+        let (menu, _) = render_with(
+            &db,
+            &HashSet::new(),
+            &HashMap::new(),
+            &synced,
+            &SearchCache::default(),
+            None,
+            true,
+        );
+        let group = menu["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| {
+                g["name"]
+                    .as_str()
+                    .is_some_and(|n| n.starts_with("Remove from StoryGraph"))
+            })
+            .expect("remove group");
+        assert_eq!(group["name"], "Remove from StoryGraph (1)");
+        let entries = group["items"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "only synced books are offered");
+        let entry = &entries[0];
+        assert_eq!(entry["name"], "Dune");
+        assert_eq!(entry["action"], "bin/unsync-book.sh");
+        assert_eq!(entry["params"], "KEY1");
+        // Both flags are load-bearing in KUAL Next (see the toggle test).
+        assert_eq!(entry["exitmenu"], false);
+        assert_eq!(entry["refresh"], true);
+
+        std::fs::remove_file(&db).ok();
+    }
+
+    #[test]
+    fn remove_group_is_hidden_without_synced_books() {
+        let db = temp_cc_db("ksg_test_menu_cc7.db", &[("KEY1", "Dune", 42.0)]);
+        let (menu, _) = render_with(
+            &db,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &SearchCache::default(),
+            None,
+            true,
+        );
+        assert!(
+            !all_entries(&menu)
+                .iter()
+                .any(|e| e["action"] == "bin/unsync-book.sh")
+        );
 
         std::fs::remove_file(&db).ok();
     }

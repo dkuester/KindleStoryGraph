@@ -184,6 +184,34 @@ pub fn toggle_allowlist(path: &Path, key: &str) -> Result<bool> {
     Ok(!present)
 }
 
+/// Removes `key` from the allowlist file, preserving other lines (including
+/// comments). Returns whether it was present; the file is only rewritten
+/// (atomically) when something changed.
+pub fn remove_from_allowlist(path: &Path, key: &str) -> Result<bool> {
+    let content = fs::read_to_string(path).unwrap_or_default();
+    let key = key.trim();
+    let mut present = false;
+    let mut kept: Vec<&str> = Vec::new();
+    for line in content.lines() {
+        let bare = line.split('=').next().unwrap_or(line).trim();
+        if bare == key {
+            present = true;
+        } else {
+            kept.push(line);
+        }
+    }
+    if !present {
+        return Ok(false);
+    }
+    let mut out = kept.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    write_atomic(path, out.as_bytes())
+        .with_context(|| format!("writing allowlist at {}", path.display()))?;
+    Ok(true)
+}
+
 /// Sets `cde_key = storygraph_id` in the manual mappings file, replacing any
 /// existing entry for that key while preserving other lines (including
 /// comments).
@@ -355,6 +383,24 @@ mod tests {
 
         assert!(toggle_allowlist(&path, "B0123").unwrap()); // re-added
         assert!(load_allowlist(&path).contains("B0123"));
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn remove_from_allowlist_keeps_comments_and_reports_presence() {
+        let path = std::env::temp_dir().join(format!(
+            "ksg_test_allowlist_remove_{}.ini",
+            std::process::id()
+        ));
+        fs::write(&path, "# my books\nB0001\nB0002=1\n").unwrap();
+
+        assert!(remove_from_allowlist(&path, "B0002").unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# my books\nB0001\n");
+        // Absent key: nothing to do, the file is left as is.
+        assert!(!remove_from_allowlist(&path, "B0002").unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# my books\nB0001\n");
+        assert!(!tmp_path(&path).exists(), "temp file must be renamed away");
 
         fs::remove_file(&path).ok();
     }

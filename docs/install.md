@@ -154,6 +154,34 @@ To link a book manually, or override a wrong automatic match:
 The mapping takes effect on the next sync cycle and overrides any automatic
 match.
 
+## 8. Removing a book from StoryGraph
+
+The allowlist only stops *future* syncs; a book that was already synced stays
+on your StoryGraph shelf. To take it back off:
+
+1. In KUAL Next → KindleStoryGraph, open **Remove from StoryGraph**. It lists
+   every book this tool has synced (the group is hidden when there are none,
+   and with `sync_scope=all`).
+2. Tap the book. It needs Wi-Fi and valid cookies. The menu stays open and the
+   book drops out of the list.
+
+On a host or over SSH the same is `kindlestorygraph unsync <cde_key>`.
+
+What happens: the book is set to **to-read** on StoryGraph, then removed from
+`allowlist.ini` (so the next sync doesn't put it back) and from `state.json`.
+If the StoryGraph call fails (no network, expired cookies) nothing changes
+locally — just try again. A manual mapping in `manual_mappings.ini` is kept on
+purpose, so if you select the book again later it links to the same
+StoryGraph edition.
+
+Limitations:
+
+- With `sync_scope=all` this is refused, because the next pass would sync the
+  book again. Switch to `sync_scope=allowlist` first.
+- Only the status is reset. Whether StoryGraph also drops the stored reading
+  progress when a book goes back to "to-read" is not verified yet; check the
+  book on StoryGraph if that matters to you.
+
 ## Notes & limitations
 
 - The daemon is started manually via KUAL. It does **not** auto-start after a

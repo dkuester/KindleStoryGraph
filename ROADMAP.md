@@ -70,6 +70,14 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
   threshold still applies to the title score only, so the author reorders
   same-title editions but never rescues a weak title or vetoes a lone match.
 
+- Remove from StoryGraph (privacy cleanup), first cut: `unsync <cde_key>` and
+  a KUAL "Remove from StoryGraph" group (synced books only) reset the book to
+  "to-read" on StoryGraph, then drop it from the allowlist and `state.json`
+  (under the state lock). Local files are only touched after the StoryGraph
+  call succeeded; a manual mapping is kept so re-enabling links the same
+  edition; refused with `sync_scope=all` (the next pass would re-attach it).
+  Not in the FBInk UI yet.
+
 ## Quick wins
 
 - **Filter non-book entries (PDOC/dummy)**
@@ -82,13 +90,12 @@ Grouped by effort vs. value: **Quick wins** (low effort, ship fast) first, then
 
 ## High priority
 
-- **Remove from StoryGraph (privacy cleanup)**
-  The allowlist only prevents *future* syncs — a book already synced stays on
-  the shelf. Add a CLI action (and a KUAL menu entry) to reset a book to
-  "to-read" on StoryGraph, completing the "keep private titles off your shelf"
-  story. Thin first cut: reset status; deeper follow-up: also clear stored
-  progress if a clear-progress endpoint is reachable (blocker: unverified).
-  Effort: medium. Mapping: `update_status(book_id, to-read)` already exists.
+- **Remove from StoryGraph: clear stored progress**
+  The first cut (see Recently completed) only resets the status to "to-read".
+  Unverified: whether StoryGraph keeps the stored progress / reading dates on
+  a to-read book. Check on a test account; if it does, find a clear-progress
+  (or remove-from-shelf) endpoint and call it from `unsync_book`. Optional:
+  a "Remove" action in the FBInk UI (needs a confirm step). Effort: medium.
 
 - ~~**Author-aware matching**~~ — done (see Recently completed).
 

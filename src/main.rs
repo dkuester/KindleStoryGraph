@@ -34,6 +34,7 @@ enum Command {
     Menu(Menu),
     FindMatches(FindMatches),
     Link(Link),
+    Unsync(Unsync),
     Doctor(Doctor),
     ImportCookies(ImportCookies),
     Ui(Ui),
@@ -197,6 +198,15 @@ struct Link {
     storygraph_id: String,
 }
 
+/// take a synced book off StoryGraph: reset it to "to-read" and stop syncing it.
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "unsync")]
+struct Unsync {
+    /// the Kindle content key (cde_key) of the book
+    #[argh(positional)]
+    cde_key: String,
+}
+
 /// print a health report: config, cc.db, allowlist, state, optional network.
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand, name = "doctor")]
@@ -353,6 +363,22 @@ fn run(cmd: Command) -> anyhow::Result<()> {
                 &l.storygraph_id,
             )?;
             println!("Linked {} -> {}", l.cde_key, l.storygraph_id);
+            if let Err(e) = menu::write_menu(Path::new(&CONFIG.cc_db_path)) {
+                eprintln!("warning: could not update the KUAL menu: {e:#}");
+            }
+        }
+        Command::Unsync(u) => {
+            let res = kindlestorygraph::sync::unsync_book(
+                &kindlestorygraph::sync::RealStoryGraph,
+                &u.cde_key,
+                Path::new(&CONFIG.state_path),
+                Path::new(&CONFIG.allowlist_path),
+                CONFIG.sync_all(),
+            )?;
+            println!(
+                "Removed {} from StoryGraph ({} set to to-read).",
+                res.cde_key, res.storygraph_id
+            );
             if let Err(e) = menu::write_menu(Path::new(&CONFIG.cc_db_path)) {
                 eprintln!("warning: could not update the KUAL menu: {e:#}");
             }
