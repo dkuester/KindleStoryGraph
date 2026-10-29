@@ -85,7 +85,8 @@ just build && just package
 ```
 
 Die Erweiterung entsteht in `packaging/extension/`. Für die Entwicklung auf
-dem Rechner: `just lint` (fmt, clippy und die Tests).
+dem Rechner: `just lint` (fmt, clippy und die Tests). `just emu-test` führt das
+armhf-Programm und die KUAL-Skripte in einem [virtuellen Kindle](docs/emulator.md) aus.
 
 Die CI führt fmt, clippy und die Tests bei jedem Push auf `main` und jedem
 Pull-Request aus. Jeder Tag `v*` baut die KUAL-ZIP in der CI und hängt sie an

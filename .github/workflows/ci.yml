@@ -31,3 +31,22 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
+
+  # Virtual Kindle (tests/emu, docs/emulator.md): the static armhf binary and
+  # the KUAL wrapper scripts in an emulated ARM container.
+  emu-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU (linux/arm/v7)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Cross-build the armhf binary
+        run: just build
+      - name: Smoke suite
+        run: just emu-test

@@ -23,3 +23,13 @@ package:
 # Host-side static checks: format + clippy (warnings as errors) + unit tests.
 lint:
     cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+
+# Virtual Kindle: interactive busybox shell in an emulated ARM container with
+# the device file layout (requires `just build`; see docs/emulator.md).
+emu-shell:
+    tests/emu/emu.sh shell
+
+# Virtual Kindle smoke suite: real armhf binary + KUAL wrapper scripts under
+# QEMU, against a fixture cc.db (requires `just build`; see docs/emulator.md).
+emu-test:
+    tests/emu/emu.sh test
