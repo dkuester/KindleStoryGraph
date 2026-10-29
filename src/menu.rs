@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::config::{self, CONFIG};
+use crate::error::UserError;
 use crate::fsutil::write_atomic;
 use crate::reader::Reader;
 use crate::state::State;
@@ -297,10 +298,12 @@ pub fn render_with(
 pub fn write_menu(cc_db: &Path) -> Result<()> {
     let (menu, has_books) = render(cc_db);
     if !has_books {
-        bail!(
+        // Expected while cc.db is missing, locked or empty: not a bug report.
+        return Err(UserError(format!(
             "cc.db returned no books — leaving {} untouched",
             CONFIG.menu_path
-        );
+        ))
+        .into());
     }
     let json = serde_json::to_vec_pretty(&menu)?;
     write_atomic(Path::new(&CONFIG.menu_path), &json).context("writing KUAL menu")

@@ -250,7 +250,14 @@ mod imp {
         fn init() -> Result<Self> {
             let fbfd = unsafe { fb::fbink_open() };
             if fbfd < 0 {
-                bail!("could not open the framebuffer (fbink_open failed)");
+                // No /dev/fb0 (e.g. run over SSH in a chroot or emulator):
+                // a condition to report, not a bug.
+                return Err(crate::error::UserError(
+                    "could not open the framebuffer (fbink_open failed) — the settings UI \
+                     only runs on the Kindle screen"
+                        .to_owned(),
+                )
+                .into());
             }
             let mut cfg = FBInkConfig::default();
             cfg.fontmult = FONT_MULT;
