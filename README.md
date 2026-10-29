@@ -85,7 +85,8 @@ just build && just package
 ```
 
 The extension is assembled in `packaging/extension/`. For development on the
-host: `just lint` (fmt, clippy and the tests).
+host: `just lint` (fmt, clippy and the tests). `just emu-test` runs the armhf
+binary and the KUAL scripts in a [virtual Kindle](docs/emulator.md).
 
 CI runs fmt, clippy and the tests on every push to `main` and every pull
 request. Every `v*` tag builds the KUAL zip in CI and attaches it to the
