@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<!--
+  Fake StoryGraph home page (tests/e2e). get_user() in src/storygraph.rs only
+  needs the /users/<slug> profile link; NOT a captured StoryGraph page.
+-->
+<html>
+<head>
+  <meta name="csrf-token" content="$csrf">
+  <title>The StoryGraph</title>
+</head>
+<body>
+  <nav><a href="/">Home</a> <a href="/browse">Browse</a> <a href="/users/$user_slug">Profile</a></nav>
+</body>
+</html>

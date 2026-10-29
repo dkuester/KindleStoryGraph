@@ -29,11 +29,14 @@ jobs:
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+      # Includes the end-to-end tests (tests/e2e.rs): the host binary against
+      # the fake StoryGraph, which needs the runner's python3.
       - name: Test
         run: cargo test --locked
 
   # Virtual Kindle (tests/emu, docs/emulator.md): the static armhf binary and
-  # the KUAL wrapper scripts in an emulated ARM container.
+  # the KUAL wrapper scripts in an emulated ARM container, including one sync
+  # against the fake StoryGraph.
   emu-test:
     runs-on: ubuntu-latest
     steps:

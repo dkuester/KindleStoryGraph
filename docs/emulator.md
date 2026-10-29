@@ -12,7 +12,9 @@ first. It supports the device tests; it does not replace them.
   (`target-armv7/armv7-unknown-linux-musleabihf/release/kindlestorygraph`).
 - The **real** KUAL wrapper scripts from `packaging/extension/bin/`, unchanged.
 - An ARM Linux container (`alpine:3.20.3`, `linux/arm/v7`, busybox `sh` like
-  the Kindle) run through QEMU by Docker, with no network.
+  the Kindle) run through QEMU by Docker, with no outside network: in
+  `emu-test` it shares only a loopback interface with the fake StoryGraph
+  (see [Stage 2](#stage-2-fake-storygraph)).
 - A scratch tree under `target/emu/run/` mounted at the device paths, so no
   script needs rewriting:
 
@@ -47,7 +49,8 @@ launcher does, e.g. `sh -c "bin/toggle-book.sh B00DUNE001"`.
 
 ## What `emu-test` covers
 
-The suite takes a few seconds after the build and needs no network:
+The suite takes a few seconds after the build and needs no network (beyond
+pulling the `alpine` and `python` images once):
 
 - packaging: every `bin/*` executable, `#!/bin/sh` shebangs, `config.xml`
   pointing at `menu.json`, the packaged `menu.json` valid JSON
@@ -70,6 +73,10 @@ The suite takes a few seconds after the build and needs no network:
 - `sync --dry-run` and `bin/sync-once.sh` without cookies fail with the clean
   "set session_cookie" message (no "unexpected error"), and write no state
 - `ui` without a framebuffer exits with a clean error instead of crashing
+- one real sync through `bin/sync-once.sh` against the fake StoryGraph: two
+  allowlisted books attached (the same-title book to the right author's
+  edition), the shelf checked on the server side, `state.json` written; a
+  non-loopback `KSG_STORYGRAPH_BASE_URL` refused
 
 CI runs the same suite in the `emu-test` job.
 
@@ -85,3 +92,94 @@ CI runs the same suite in the `emu-test` job.
   rename and fsync semantics; the emulator's scratch tree is a normal
   filesystem
 - the real StoryGraph session (cookies, Cloudflare, network)
+
+## Stage 2: fake StoryGraph
+
+The sync engine's unit tests (`src/sync.rs`) use a mock of the client trait,
+so they never touch the HTTP client, the HTML parsers or the CLI. Stage 2
+runs the **real binary** against a local **fake StoryGraph**, so full sync,
+remove and error flows are tested without a StoryGraph account.
+
+### Pieces
+
+- `tests/e2e/fake_storygraph.py` — Python stdlib only, stateful and
+  deterministic. Python rather than a Rust helper because it runs unchanged
+  on the host (`cargo test`) and in a stock `python` container next to the
+  emulator, keeps the stateful fake short, and needs no extra crates. It
+  serves `GET /`, `/browse?search_term=`, `/books/<id>`,
+  `/books/<id>/check_tags`, `POST /update-status.js`, `/update-progress`,
+  `/remove-book/<id>` and the sign-in page/form, and it **enforces** what the
+  real site does: a valid `_storygraph_session` (rotated on every response)
+  or `remember_user_token`, else a redirect to `/users/sign_in`; the CSRF
+  token and a matching `Origin` on every POST, else 422.
+- `tests/e2e/templates/*.html` and `tests/e2e/catalog.json` — the pages and
+  the catalog (same-title editions are listed wrong-one-first on purpose, an
+  audio edition and "Dune Messiah" sit next to "Dune").
+- A control channel that is not part of StoryGraph: `GET /__state` (shelf,
+  tags, every mutation as an event, the request log), `POST /__reset`,
+  `POST /__fault` (500, slow response, expired session, wrong-format page;
+  per path prefix, optionally limited to N hits), `POST /__clear_faults`.
+- `tests/e2e.rs` — Rust integration tests: each test starts its own fake on
+  port 0 and its own temp dir (config with every `*_path` in it, fake
+  cookies, a cc.db built from `tests/emu/cc_fixture.sql`), runs the binary
+  (`CARGO_BIN_EXE_kindlestorygraph`) and asserts on **both** the CLI outcome
+  (JSON, exit code, messages) and the server state.
+
+### Pointing the binary at the fake
+
+`KSG_STORYGRAPH_BASE_URL` overrides `https://app.thestorygraph.com`. Only
+`http://127.0.0.1:<port>` and `http://localhost:<port>` are accepted (no
+path, credentials, query); anything else is refused with an error instead of
+falling back, because the session cookies go to whatever host it names.
+Unset, the behaviour is unchanged. `KSG_STORYGRAPH_SEARCH_TIMEOUT_MS`
+shortens the 15 s search timeout, and is honoured only together with the
+override.
+
+### Running
+
+```bash
+just e2e-test          # = cargo test --test e2e (also part of just lint)
+just fake-storygraph   # the fake on 127.0.0.1:8080 for manual tries
+```
+
+e.g. `KSG_STORYGRAPH_BASE_URL=http://127.0.0.1:8080 cargo run -- search Dune`
+with a config that has `session_cookie=fake-session-cookie`. CI runs the e2e
+tests in the `test` job and the emulator scenario in `emu-test`.
+
+### What the e2e tests cover
+
+- first sync: books attached, status and progress set, unknown books
+  `no_match`; same-title editions resolved by author, the audio edition and
+  a superset title ("Dune Messiah") not picked
+- progress updates, and no write below `progress_step`
+- the backward-progress guard: `skipped_behind` when StoryGraph is further
+  along or the book is already read there, nothing written
+- finishing: status "read" only, never "rereading", nothing pushed later
+- per-book failure isolation: one book's 500 fails only that book, the
+  others sync and are saved, exit code non-zero; the next pass retries it
+- expired session: `sync`, `unsync`, `whoami`, `search` all end with the
+  "session has expired" message (never "unexpected error"), nothing changed
+- `unsync` → "to-read", allowlist and state updated, next pass leaves it
+  alone; `unsync --completely` → gone server-side, tags kept only when the
+  book has any; a never-synced book refused
+- `--dry-run`: no POST at all, server and state unchanged
+- search timeout and wrong-format pages surface as clean per-book failures
+- `whoami` and `login` (cookie round trip), and the base-URL guard
+
+### Drift: the fake is not StoryGraph
+
+The fake's HTML is written to match the parsers in `src/storygraph.rs`, not
+captured from StoryGraph. A green run proves the client and the fake agree;
+it cannot notice StoryGraph changing its markup or endpoints. Known blind
+spots:
+
+- a search page without the expected markup is indistinguishable from "no
+  results": the book becomes `no_match`, silently (a test pins this down)
+- the audio filter looks for "Format: audio" in a search result; whether the
+  live search page still prints that is unverified
+- Cloudflare, rate limits and real cookie lifetimes do not exist here
+
+So the live-account checks stay in the device checklist: one real sync, one
+`unsync` and a look at the StoryGraph shelf after each release. When a live
+check finds new markup, change the parser, the templates and their test
+together.

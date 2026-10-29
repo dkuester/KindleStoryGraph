@@ -1,0 +1,13 @@
+{
+  "_comment": "Fake StoryGraph catalog (tests/e2e). Search returns books in this order, so the same-title editions are listed wrong-one-first on purpose: the client's ranking has to pick the right one.",
+  "books": [
+    {"id": "dune-messiah-0002", "title": "Dune Messiah", "author": "Frank Herbert", "pages": 352, "format": "digital"},
+    {"id": "dune-audio-0001", "title": "Dune", "author": "Frank Herbert", "pages": 0, "format": "audio"},
+    {"id": "dune-0001", "title": "Dune", "author": "Frank Herbert", "pages": 688, "format": "digital"},
+    {"id": "phm-0001", "title": "Project Hail Mary", "author": "Andy Weir", "pages": 496, "format": "digital"},
+    {"id": "martian-0001", "title": "The Martian", "author": "Andy Weir", "pages": 384, "format": "digital"},
+    {"id": "outsider-camus-0001", "title": "The Outsider", "author": "Albert Camus", "pages": 128, "format": "paperback"},
+    {"id": "outsider-king-0001", "title": "The Outsider", "author": "Stephen King", "pages": 576, "format": "digital"},
+    {"id": "schwarm-0001", "title": "Der Schwarm", "author": "Frank Schätzing", "pages": 992, "format": "digital"}
+  ]
+}

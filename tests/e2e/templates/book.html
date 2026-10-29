@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!--
+  Fake StoryGraph book page (tests/e2e). This markup mirrors what the parsers
+  in src/storygraph.rs expect (csrf_token, parse_user_book, hidden_value,
+  progress_percent_from_edit_progress); it is NOT a captured StoryGraph page.
+  When the parsers change, change this file with them.
+-->
+<html>
+<head>
+  <meta name="csrf-token" content="$csrf">
+  <title>$title | The StoryGraph</title>
+</head>
+<body>
+  <nav><a href="/">Home</a> <a href="/users/$user_slug">Profile</a></nav>
+  <h3>$title</h3>
+  <p><a href="/authors/$author_slug">$author</a></p>
+  $status_block
+  <form class="progress-form" action="/update-progress" method="post">
+    <input type="hidden" name="authenticity_token" value="$csrf">
+    <input type="hidden" name="read_status[book_num_of_pages]" value="$pages">
+  </form>
+  <div class="edition-info">
+    <p><span>Format:</span> $format</p>
+    <p><span>Pages:</span> $pages</p>
+  </div>
+</body>
+</html>

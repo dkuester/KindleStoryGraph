@@ -11,6 +11,13 @@
 #   target/emu/run/mnt/us   -> /mnt/us     (extension as `just package` lays it out)
 #   target/emu/run/var/local -> /var/local (cc.db built from tests/emu/cc_fixture.sql)
 #
+# The smoke suite also runs one sync against the fake StoryGraph (stage 2,
+# tests/e2e/fake_storygraph.py): the fake runs in a native python container
+# with --network none, and the emulated Kindle joins that container's network
+# namespace, so both share a loopback interface and nothing else — the
+# binary reaches the fake at http://127.0.0.1:8080, and no container can reach
+# any other host.
+#
 # Environment:
 #   KSG_EMU_CC_DB=/path/to/cc.db  use a private cc.db dump instead of the fixture
 #                                 (the fixture-specific checks are skipped)
@@ -19,6 +26,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IMAGE="alpine:3.20.3"
+FAKE_IMAGE="python:3.12.7-alpine3.20"
+FAKE_URL="http://127.0.0.1:8080"
 PLATFORM="linux/arm/v7"
 BIN="$ROOT/target-armv7/armv7-unknown-linux-musleabihf/release/kindlestorygraph"
 RUN="$ROOT/target/emu/run"
@@ -83,6 +92,7 @@ cmd_shell() {
 PASS=0
 FAIL=0
 CID=""
+FAKE_CID=""
 
 ok() {
     PASS=$((PASS + 1))
@@ -126,15 +136,32 @@ time_action() {
         awk '{ printf "%.0f", ($2 - $1) * 1000 }'
 }
 
+# The fake StoryGraph's /__state, read inside its own container.
+fake_state() {
+    docker exec "$FAKE_CID" python -I -c 'import sys, urllib.request
+sys.stdout.write(urllib.request.urlopen(sys.argv[1] + "/__state").read().decode())' "$FAKE_URL"
+}
+fake_ready() {
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        fake_state >/dev/null 2>&1 && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
 cmd_test() {
     prepare
     local fixture=1
     [ -n "${KSG_EMU_CC_DB:-}" ] && fixture=0
 
     local t0=$SECONDS out rc
-    CID=$(docker run -d --rm --network none "${DOCKER_ARGS[@]}" "$IMAGE" sleep 600)
-    trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
-    echo "Virtual Kindle up ($IMAGE, $PLATFORM, $(kx 'uname -m'), network none)"
+    # The fake StoryGraph owns the (network-less) namespace; see the header.
+    FAKE_CID=$(docker run -d --rm --network none -v "$ROOT/tests/e2e:/e2e:ro" "$FAKE_IMAGE" \
+        python -I /e2e/fake_storygraph.py --host 127.0.0.1 --port 8080)
+    trap 'docker rm -f "$CID" "$FAKE_CID" >/dev/null 2>&1 || true' EXIT
+    CID=$(docker run -d --rm --network "container:$FAKE_CID" "${DOCKER_ARGS[@]}" "$IMAGE" sleep 600)
+    echo "Virtual Kindle up ($IMAGE, $PLATFORM, $(kx 'uname -m'), network: loopback shared with the fake StoryGraph only)"
     [ $fixture = 1 ] || echo "(private cc.db via KSG_EMU_CC_DB: fixture-specific checks skipped)"
 
     echo "packaging"
@@ -243,6 +270,29 @@ cmd_test() {
     check "sync --dry-run wrote no state.json" [ ! -e "$EXT/state.json" ]
     kx 'sh -c "bin/sync-once.sh"' >/dev/null || true
     check "sync-once.sh logs the clean message" grep -q "session_cookie" "$EXT/kindlestorygraph.log"
+
+    echo "sync against the fake StoryGraph (stage 2)"
+    if [ $fixture = 1 ]; then
+        fake_ready || bad "fake StoryGraph did not start"
+        sed -i.bak -e 's/^session_cookie=.*/session_cookie=fake-session-cookie/' \
+            -e 's/^remember_user_token=.*/remember_user_token=fake-remember-token/' "$EXT/config.ini"
+        # Fresh start (the link step above mapped Dune to a dummy id). Written
+        # inside the container: on a Linux host these files are root-owned.
+        kx "printf 'B00DUNE001\\nB07D7CWN1L\\n' > allowlist.ini; rm -f state.json manual_mappings.ini kindlestorygraph.log" >/dev/null
+        out=$(kx "KSG_STORYGRAPH_BASE_URL=$FAKE_URL sh -c 'bin/sync-once.sh'") && rc=0 || rc=$?
+        check "sync-once.sh exits 0 (exit $rc)" [ $rc = 0 ]
+        out=$(cat "$EXT/kindlestorygraph.log")
+        check "log: Dune attached to dune-0001" contains "$out" '"storygraph_id": "dune-0001"'
+        check "log: The Outsider (King) attached to the King edition" contains "$out" '"storygraph_id": "outsider-king-0001"'
+        check "log: no failures" lacks "$out" '"failed"'
+        out=$(fake_state)
+        check "server: Dune currently-reading at 42 %" contains "$out" '"dune-0001": {"status": "currently-reading", "percent": 42}'
+        check "server: King edition at 30 %" contains "$out" '"outsider-king-0001": {"status": "currently-reading", "percent": 30}'
+        check "state.json links Dune" grep -q '"dune-0001"' "$EXT/state.json"
+        out=$(kx "KSG_STORYGRAPH_BASE_URL=http://example.com:8080 KINDLE_STORYGRAPH_CONFIG=$DEV_EXT/config.ini bin/kindlestorygraph whoami") && rc=0 || rc=$?
+        check "non-loopback base URL refused (exit $rc)" contains "$out" "refused"
+        mv "$EXT/config.ini.bak" "$EXT/config.ini"
+    fi
 
     echo "ui without a framebuffer"
     out=$(kx 'sh -c "bin/ui.sh"') && rc=0 || rc=$?
