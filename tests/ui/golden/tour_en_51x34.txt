@@ -1,0 +1,569 @@
+frame 001  51x34  flash
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Last sync: just now                              |
+|  Synced: 2 / 7                                    |
+|  Session: set                                     |
+|                                                   |
+|  BOOKS (1-7/7)                                    |
+|  Dune                                             | <inv
+|    42%  Frank Herbert  [linked]                   | <inv
+|  Project Hail Mary                                |
+|   100%  Andy Weir                                 |
+|  The Martian                                      |
+|   100%  Andy Weir                                 |
+|  The Outsider                                     |
+|    30%  Stephen King                              |
+|  The Outsider                                     |
+|    55%  Albert Camus                              |
+|  Der Schwarm                                      | <inv
+|    12%  Frank Schätzing  [linked]                 | <inv
+|  Meeting notes 2026                               |
+|    15%  Daniel                                    |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|    [ Sync now ]                         [ Exit ]  |
+|    [ Settings ]                         [ Link ]  |
+|  Book = sync   ^ = up   v = down                  |
++---------------------------------------------------+
+
+frame 002  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Settings (read-only)                             |
+|                                                   |
+|                                                   |
+|                                                   |
+|  min_progress        2.0 %                        |
+|  finish_threshold    99.5 %                       |
+|  language            en                           |
+|  sync_scope          allowlist                    |
+|  cc.db              <temp>                        |
+|  state              <temp>                        |
+|  manual mappings    <temp>                        |
+|  allowlist          <temp>                        |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|   [ Back ]                                        |
+|                                                   |
+|  Read-only - tap Back                             |
++---------------------------------------------------+
+
+frame 003  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Last sync: just now                              |
+|  Synced: 2 / 7                                    |
+|  Session: set                                     |
+|                                                   |
+|  BOOKS (1-7/7)                                    |
+|  Dune                                             | <inv
+|    42%  Frank Herbert  [linked]                   | <inv
+|  Project Hail Mary                                |
+|   100%  Andy Weir                                 |
+|  The Martian                                      |
+|   100%  Andy Weir                                 |
+|  The Outsider                                     |
+|    30%  Stephen King                              |
+|  The Outsider                                     |
+|    55%  Albert Camus                              |
+|  Der Schwarm                                      | <inv
+|    12%  Frank Schätzing  [linked]                 | <inv
+|  Meeting notes 2026                               |
+|    15%  Daniel                                    |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|    [ Sync now ]                         [ Exit ]  |
+|    [ Settings ]                         [ Link ]  |
+|  Book = sync   ^ = up   v = down                  |
++---------------------------------------------------+
+
+frame 004  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Link a book                                      |
+|  Tap a book to search StoryGraph                  |
+|                                                   |
+|                                                   |
+|  BOOKS (1-7/7)                                    |
+|  Dune                                             | <inv
+|    42%  Frank Herbert  [linked]                   | <inv
+|  Project Hail Mary                                |
+|   100%  Andy Weir                                 |
+|  The Martian                                      |
+|   100%  Andy Weir                                 |
+|  The Outsider                                     |
+|    30%  Stephen King                              |
+|  The Outsider                                     |
+|    55%  Albert Camus                              |
+|  Der Schwarm                                      | <inv
+|    12%  Frank Schätzing  [linked]                 | <inv
+|  Meeting notes 2026                               |
+|    15%  Daniel                                    |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|   [ Back ]                            [ Remove ]  |
+|                                                   |
+|  Book = search   ^ = up   v = down                |
++---------------------------------------------------+
+
+frame 005  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|                                                   |
+|  Searching...                                     |
+|  Der Schwarm                                      |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|   [ Cancel ]                                      |
+|                                                   |
+|  Waiting for StoryGraph                           |
++---------------------------------------------------+
+
+frame 006  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Link: Der Schwarm                                |
+|                                                   |
+|                                                   |
+|                                                   |
+|  RESULTS (1-1/1)                                  |
+|  Der Schwarm - Frank Schätzing                    |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|   [ Back ]                                        |
+|                                                   |
+|  Tap a match to link                              |
++---------------------------------------------------+
+
+frame 007  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Last sync: just now                              |
+|  Synced: 2 / 7                                    |
+|  Session: set                                     |
+|                                                   |
+|  Linked                                           | <inv
+|  Dune                                             | <inv
+|    42%  Frank Herbert  [linked]                   | <inv
+|  Project Hail Mary                                |
+|   100%  Andy Weir                                 |
+|  The Martian                                      |
+|   100%  Andy Weir                                 |
+|  The Outsider                                     |
+|    30%  Stephen King                              |
+|  The Outsider                                     |
+|    55%  Albert Camus                              |
+|  Der Schwarm                                      | <inv
+|    12%  Frank Schätzing  [linked]                 | <inv
+|  Meeting notes 2026                               |
+|    15%  Daniel                                    |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|    [ Sync now ]                         [ Exit ]  |
+|    [ Settings ]                         [ Link ]  |
+|  Book = sync   ^ = up   v = down                  |
++---------------------------------------------------+
+
+frame 008  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Link a book                                      |
+|  Tap a book to search StoryGraph                  |
+|                                                   |
+|                                                   |
+|  BOOKS (1-7/7)                                    |
+|  Dune                                             | <inv
+|    42%  Frank Herbert  [linked]                   | <inv
+|  Project Hail Mary                                |
+|   100%  Andy Weir                                 |
+|  The Martian                                      |
+|   100%  Andy Weir                                 |
+|  The Outsider                                     |
+|    30%  Stephen King                              |
+|  The Outsider                                     |
+|    55%  Albert Camus                              |
+|  Der Schwarm                                      | <inv
+|    12%  Frank Schätzing  [linked]                 | <inv
+|  Meeting notes 2026                               |
+|    15%  Daniel                                    |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|   [ Back ]                            [ Remove ]  |
+|                                                   |
+|  Book = search   ^ = up   v = down                |
++---------------------------------------------------+
+
+frame 009  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Remove from StoryGraph                           |
+|  Tap a synced book                                |
+|                                                   |
+|                                                   |
+|  BOOKS (1-2/2)                                    |
+|  Dune                                             | <inv
+|    42%  Frank Herbert  [linked]                   | <inv
+|  Der Schwarm                                      | <inv
+|    12%  Frank Schätzing  [linked]                 | <inv
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|   [ Back ]                                        |
+|                                                   |
+|  Book = remove   ^ = up   v = down                |
++---------------------------------------------------+
+
+frame 010  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Remove from StoryGraph?                          |
+|                                                   |
+|  Dune                                             | <inv
+|                                                   |
+|  Sets the book to "to-read" on                    |
+|  StoryGraph and stops syncing it.                 |
+|  Needs Wi-Fi.                                     |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|   [ Remove ]                          [ Cancel ]  |
+|   [ Remove completely... ]                        |
+|  Completely = also delete history + review        |
++---------------------------------------------------+
+
+frame 011  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Remove COMPLETELY?                               | <inv
+|                                                   |
+|  Dune                                             | <inv
+|                                                   |
+|  Removes the book from StoryGraph and             |
+|  DELETES its reading history (journal)            |
+|  AND your review there. This cannot               |
+|  be undone. Needs Wi-Fi.                          |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|   [ Delete ]                          [ Cancel ]  |
+|                                                   |
+|                                                   |
++---------------------------------------------------+
+
+frame 012  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Remove from StoryGraph?                          |
+|                                                   |
+|  Dune                                             | <inv
+|                                                   |
+|  Sets the book to "to-read" on                    |
+|  StoryGraph and stops syncing it.                 |
+|  Needs Wi-Fi.                                     |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|   [ Remove ]                          [ Cancel ]  |
+|   [ Remove completely... ]                        |
+|  Completely = also delete history + review        |
++---------------------------------------------------+
+
+frame 013  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|                                                   |
+|  Removing...                                      |
+|  Dune                                             |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|   [ Back ]                                        |
+|                                                   |
+|  Back = keeps running in background               |
++---------------------------------------------------+
+
+frame 014  51x34  partial
++---------------------------------------------------+
+|                 KindleStoryGraph                  | <inv
+|                                                   |
+|  Last sync: just now                              |
+|  Synced: 1 / 7                                    |
+|  Session: set                                     |
+|                                                   |
+|  Removed: Dune                                    | <inv
+|  Dune                                             |
+|    42%  Frank Herbert                             |
+|  Project Hail Mary                                |
+|   100%  Andy Weir                                 |
+|  The Martian                                      |
+|   100%  Andy Weir                                 |
+|  The Outsider                                     |
+|    30%  Stephen King                              |
+|  The Outsider                                     |
+|    55%  Albert Camus                              |
+|  Der Schwarm                                      | <inv
+|    12%  Frank Schätzing  [linked]                 | <inv
+|  Meeting notes 2026                               |
+|    15%  Daniel                                    |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|    [ Sync now ]                         [ Exit ]  |
+|    [ Settings ]                         [ Link ]  |
+|  Book = sync   ^ = up   v = down                  |
++---------------------------------------------------+
+
+frame 015  51x34  flash
++---------------------------------------------------+
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
+|                                                   |
++---------------------------------------------------+
