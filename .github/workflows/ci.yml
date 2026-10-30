@@ -29,14 +29,15 @@ jobs:
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
-      # Includes the end-to-end tests (tests/e2e.rs): the host binary against
-      # the fake StoryGraph, which needs the runner's python3.
+      # Includes the end-to-end tests (tests/e2e.rs) and the headless UI tests
+      # (tests/ui.rs): the host binary against the fake StoryGraph, which
+      # needs the runner's python3.
       - name: Test
         run: cargo test --locked
 
   # Virtual Kindle (tests/emu, docs/emulator.md): the static armhf binary and
   # the KUAL wrapper scripts in an emulated ARM container, including one sync
-  # against the fake StoryGraph.
+  # and one headless FBInk UI session against the fake StoryGraph.
   emu-test:
     runs-on: ubuntu-latest
     steps:
@@ -53,3 +54,12 @@ jobs:
         run: just build
       - name: Smoke suite
         run: just emu-test
+      # The headless FBInk screenshots (NNN.pgm) and text frames of the UI
+      # scenario, for a look at the screens without a device.
+      - name: Upload UI frames
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-frames
+          path: target/emu/run/var/local/ui-frames/
+          if-no-files-found: ignore

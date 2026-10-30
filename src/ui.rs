@@ -1,15 +1,19 @@
-//! The FBInk framebuffer settings UI (Kindle, ARM Linux only).
+//! The FBInk framebuffer settings UI.
 //!
-//! Draws directly to the e-ink framebuffer via FBInk (statically linked) and
-//! reads touch input from `/dev/input/event*`. No X server, no browser, no
-//! toolkit. The pure data/layout helpers live outside the `imp` module so they
-//! stay unit-testable on the host.
+//! On the Kindle (ARM Linux) it draws directly to the e-ink framebuffer via
+//! FBInk (statically linked) and reads touch input from `/dev/input/event*`.
+//! No X server, no browser, no toolkit.
+//!
+//! The screens and the tap handling only talk to a [`Display`](imp::Display)
+//! and an input source, so the same UI also runs headless on any host
+//! (`ui --script … --frames …`, see docs/emulator.md "Stage 3"): a character
+//! grid with FBInk's cell geometry stands in for the framebuffer, a tap script
+//! for the touchscreen, and every refresh is written out as a text frame.
 
 use anyhow::Result;
 
 /// One book line as shown in the list (pure, host-testable).
 #[derive(Debug, Clone)]
-#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 pub(crate) struct BookRow {
     pub cde_key: String,
     pub title: String,
@@ -24,7 +28,6 @@ pub(crate) struct BookRow {
 /// Build the display rows for the snapshot (pure, host-testable). The badges
 /// (`[sync]`, `[linked]`) are folded into a single trailing suffix.
 /// `on_shelf` are the books in `state.json` (offered under "Remove").
-#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 pub(crate) fn build_rows(
     snapshot: &[crate::reader::BookProgress],
     allowlist: &std::collections::HashSet<String>,
@@ -47,7 +50,6 @@ pub(crate) fn build_rows(
 
 /// Indices of the rows the "Remove from StoryGraph" list offers: the books
 /// this tool synced (pure, host-testable).
-#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 pub(crate) fn shelf_indices(rows: &[BookRow]) -> Vec<usize> {
     rows.iter()
         .enumerate()
@@ -59,7 +61,6 @@ pub(crate) fn shelf_indices(rows: &[BookRow]) -> Vec<usize> {
 /// Format the read-only settings screen into one line per setting (pure,
 /// host-testable). Labels are the config keys; the UI pads/truncates each line
 /// to the framebuffer width.
-#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 pub(crate) fn settings_lines(cfg: &crate::config::Config) -> Vec<String> {
     vec![
         format!("min_progress        {:.1} %", cfg.min_progress),
@@ -74,7 +75,6 @@ pub(crate) fn settings_lines(cfg: &crate::config::Config) -> Vec<String> {
 }
 
 /// Truncate to at most `max` chars (with a `~` marker when cut).
-#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_owned();
@@ -84,7 +84,6 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 /// Left-justify (pad with spaces) to exactly `cols` chars.
-#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 fn pad_right(s: &str, cols: usize) -> String {
     let mut out = truncate_chars(s, cols);
     out.push_str(&" ".repeat(cols.saturating_sub(out.chars().count())));
@@ -92,7 +91,6 @@ fn pad_right(s: &str, cols: usize) -> String {
 }
 
 /// Center a string to exactly `cols` chars.
-#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 fn pad_center(s: &str, cols: usize) -> String {
     let s = truncate_chars(s, cols);
     let len = s.chars().count();
@@ -104,37 +102,37 @@ fn pad_center(s: &str, cols: usize) -> String {
     out
 }
 
-/// Runs the on-device UI. `open_remove` starts on the "Remove from
-/// StoryGraph" list instead of the main screen (the KUAL entry point).
-#[cfg(not(all(target_os = "linux", target_arch = "arm")))]
-pub fn run(_open_remove: bool) -> Result<()> {
-    eprintln!("The `ui` command is only available on the Kindle (ARM Linux).");
-    Ok(())
+pub use imp::Headless;
+
+/// Runs the UI: on the Kindle screen, or headless when `headless` is given.
+/// `open_remove` starts on the "Remove from StoryGraph" list instead of the
+/// main screen (the KUAL entry point).
+pub fn run(open_remove: bool, headless: Option<Headless>) -> Result<()> {
+    imp::run(open_remove, headless)
 }
 
-/// Runs the on-device UI. `open_remove` starts on the "Remove from
-/// StoryGraph" list instead of the main screen (the KUAL entry point).
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-pub fn run(open_remove: bool) -> Result<()> {
-    imp::run(open_remove)
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
 mod imp {
     use super::{pad_center, pad_right, truncate_chars};
+    use std::cell::{Cell, RefCell};
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     use std::ffi::CString;
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     use std::os::raw::{c_int, c_void};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use anyhow::{Context, Result, bail};
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    use anyhow::bail;
+    use anyhow::{Context, Result};
 
     use crate::config::{
         CONFIG, add_manual_mapping, load_allowlist, load_manual_mappings, toggle_allowlist,
     };
     use crate::daemon;
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     use crate::fbink as fb;
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     use crate::fbink::{FBInkConfig, FBInkState, InputEvent};
     use crate::menu::{self, Candidate};
     use crate::reader::Reader;
@@ -183,16 +181,26 @@ mod imp {
         }
     }
 
-    /// Classify a StoryGraph (search/remove) error into a short,
-    /// user-actionable line.
-    fn classify_network_error(msg: &str) -> String {
+    /// The short, user-actionable line for an error with a known cause
+    /// (lock held, StoryGraph down, timeout, expired session, no cookies, no
+    /// network), or `None`.
+    fn known_cause(msg: &str) -> Option<&'static str> {
         let lower = msg.to_lowercase();
-        if lower.contains("timed out") || lower.contains("timeout") {
+        Some(if lower.contains("another sync pass") {
+            t(
+                "Sync already running - retry later",
+                "Sync läuft schon - später erneut",
+            )
+        } else if lower.contains("server error") {
+            t(
+                "StoryGraph error - try again later",
+                "StoryGraph-Fehler - später erneut",
+            )
+        } else if lower.contains("timed out") || lower.contains("timeout") {
             t(
                 "Timed out - check network",
                 "Zeitüberschreitung - Netz prüfen",
             )
-            .to_owned()
         } else if (lower.contains("session") && lower.contains("expired"))
             || lower.contains("sign_in")
         {
@@ -200,22 +208,26 @@ mod imp {
                 "Session expired - refresh cookies",
                 "Sitzung abgelaufen - Cookies erneuern",
             )
-            .to_owned()
         } else if lower.contains("session_cookie") {
             t(
                 "No cookies - run setup first",
                 "Keine Cookies - erst Setup ausführen",
             )
-            .to_owned()
         } else if lower.contains("error sending request")
             || lower.contains("dns")
             || lower.contains("connection")
         {
-            t("No network connection", "Keine Netzwerkverbindung").to_owned()
+            t("No network connection", "Keine Netzwerkverbindung")
         } else {
-            // Raw message; the draw path truncates it to fit.
-            msg.to_owned()
-        }
+            return None;
+        })
+    }
+
+    /// Classify a StoryGraph (search/remove/sync) error into a short,
+    /// user-actionable line; unknown errors stay raw (the draw path
+    /// truncates them to fit).
+    fn classify_network_error(msg: &str) -> String {
+        known_cause(msg).unwrap_or(msg).to_owned()
     }
 
     const FONT_MULT: u8 = 3;
@@ -229,23 +241,85 @@ mod imp {
     const UTIL_OFFSET_FROM_BOTTOM: i16 = 2;
     const HINT_OFFSET_FROM_BOTTOM: i16 = 1;
 
+    // ── Display & input abstraction ─────────────────────────────────────────
+
+    /// What the screens draw on: FBInk's text grid on the Kindle, or the
+    /// headless [`Grid`]. Coordinates are FBInk cells (row, col).
+    pub(crate) trait Display {
+        fn cols(&self) -> usize;
+        fn rows(&self) -> usize;
+        /// The cell under a raw touch coordinate.
+        fn cell_at(&self, x: i32, y: i32) -> (i16, i16);
+        /// Draw text at a grid cell (batched; no refresh).
+        fn print(&self, row: i16, col: i16, text: &str, inverted: bool, centered: bool);
+        /// Clear to background (batched; no refresh).
+        fn cls(&self);
+        /// Flush the batched drawing to the screen.
+        fn refresh(&self, flash: bool);
+    }
+
+    /// One step of the input source.
+    enum Event {
+        /// A finished tap (finger lifted) at a raw touch coordinate.
+        Tap(i32, i32),
+        /// Nothing happened; the loop polls background work and asks again.
+        Idle,
+        /// The input is exhausted (end of a headless script).
+        Quit,
+    }
+
+    trait Input {
+        /// The next event. `busy` tells whether a background search/removal
+        /// is still running.
+        fn next(&mut self, busy: bool) -> Result<Event>;
+    }
+
+    /// Panel quirks FBInk reports for mapping touch to framebuffer
+    /// coordinates.
+    #[derive(Clone, Copy, Default)]
+    pub(crate) struct TouchGeometry {
+        pub cell_w: usize,
+        pub cell_h: usize,
+        pub view_vert_origin: usize,
+        pub screen_w: usize,
+        pub screen_h: usize,
+        pub swap_axes: bool,
+        pub mirror_x: bool,
+        pub mirror_y: bool,
+    }
+
+    /// Map a raw panel coordinate to a grid cell, honoring the device's touch
+    /// quirks: swap first, then mirror each axis, then subtract the viewport
+    /// origin and divide by the cell size.
+    pub(crate) fn touch_to_cell(g: &TouchGeometry, x: i32, y: i32) -> (i16, i16) {
+        let (mut x, mut y) = (x, y);
+        if g.swap_axes {
+            std::mem::swap(&mut x, &mut y);
+        }
+        if g.mirror_x {
+            x = g.screen_w as i32 - 1 - x;
+        }
+        if g.mirror_y {
+            y = g.screen_h as i32 - 1 - y;
+        }
+        let row = ((y - g.view_vert_origin as i32).max(0) / g.cell_h.max(1) as i32) as i16;
+        let col = (x.max(0) / g.cell_w.max(1) as i32) as i16;
+        (row, col)
+    }
+
+    // ── Kindle: FBInk + touchscreen ─────────────────────────────────────────
+
     /// Owns the framebuffer fd and a zeroed-but-init'd FBInk config.
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     struct Fb {
         fbfd: c_int,
         cfg: FBInkConfig,
-        fw: usize, // effective cell width (px)
-        fh: usize, // effective cell height (px)
         cols: usize,
         rows: usize,
-        // Touch correction (from FBInkState device quirks).
-        view_vert_origin: usize,
-        screen_w: usize,
-        screen_h: usize,
-        touch_swap_axes: bool,
-        touch_mirror_x: bool,
-        touch_mirror_y: bool,
+        touch: TouchGeometry,
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     impl Fb {
         fn init() -> Result<Self> {
             let fbfd = unsafe { fb::fbink_open() };
@@ -272,36 +346,33 @@ mod imp {
             Ok(Fb {
                 fbfd,
                 cfg,
-                fw: st.font_w as usize,
-                fh: st.font_h as usize,
                 cols: st.max_cols as usize,
                 rows: st.max_rows as usize,
-                view_vert_origin: st.view_vert_origin as usize,
-                screen_w: st.screen_width as usize,
-                screen_h: st.screen_height as usize,
-                touch_swap_axes: st.touch_swap_axes,
-                touch_mirror_x: st.touch_mirror_x,
-                touch_mirror_y: st.touch_mirror_y,
+                touch: TouchGeometry {
+                    cell_w: st.font_w as usize,
+                    cell_h: st.font_h as usize,
+                    view_vert_origin: st.view_vert_origin as usize,
+                    screen_w: st.screen_width as usize,
+                    screen_h: st.screen_height as usize,
+                    swap_axes: st.touch_swap_axes,
+                    mirror_x: st.touch_mirror_x,
+                    mirror_y: st.touch_mirror_y,
+                },
             })
         }
+    }
 
-        /// Map a raw panel coordinate to a framebuffer coordinate, honoring the
-        /// device's touch quirks (swap first, then mirror each axis).
-        fn map_touch(&self, x: i32, y: i32) -> (i32, i32) {
-            let (mut x, mut y) = (x, y);
-            if self.touch_swap_axes {
-                std::mem::swap(&mut x, &mut y);
-            }
-            if self.touch_mirror_x {
-                x = self.screen_w as i32 - 1 - x;
-            }
-            if self.touch_mirror_y {
-                y = self.screen_h as i32 - 1 - y;
-            }
-            (x, y)
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    impl Display for Fb {
+        fn cols(&self) -> usize {
+            self.cols
         }
-
-        /// Draw text at a grid cell (batched; no refresh).
+        fn rows(&self) -> usize {
+            self.rows
+        }
+        fn cell_at(&self, x: i32, y: i32) -> (i16, i16) {
+            touch_to_cell(&self.touch, x, y)
+        }
         fn print(&self, row: i16, col: i16, text: &str, inverted: bool, centered: bool) {
             let Ok(c) = CString::new(text) else {
                 return;
@@ -314,15 +385,11 @@ mod imp {
             p.no_refresh = true;
             unsafe { fb::fbink_print(self.fbfd, c.as_ptr(), &p) };
         }
-
-        /// Clear to background (batched; no refresh).
         fn cls(&self) {
             let mut p = self.cfg;
             p.no_refresh = true;
             unsafe { fb::fbink_cls(self.fbfd, &p, std::ptr::null(), false) };
         }
-
-        /// Flush the batched drawing to the e-ink screen.
         fn refresh(&self, flash: bool) {
             let mut r = self.cfg;
             r.is_flashing = flash;
@@ -331,9 +398,347 @@ mod imp {
         }
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     impl Drop for Fb {
         fn drop(&mut self) {
             unsafe { fb::fbink_close(self.fbfd) };
+        }
+    }
+
+    /// The touchscreen, read non-blocking so the loop can also poll for a
+    /// completed background search instead of freezing on a blocking read
+    /// while the network is busy.
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    struct Touch {
+        fd: c_int,
+        touching: bool,
+        was_touching: bool,
+        x: i32,
+        y: i32,
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    impl Touch {
+        fn open() -> Result<Self> {
+            let mut dev_count: usize = 0;
+            let devs = unsafe {
+                fb::fbink_input_scan(
+                    fb::INPUT_TOUCHSCREEN | fb::INPUT_TABLET,
+                    0,
+                    fb::OPEN_BLOCKING | fb::NO_RECAP,
+                    &mut dev_count,
+                )
+            };
+            if devs.is_null() || dev_count == 0 {
+                bail!("no input devices found");
+            }
+            let mut fd: c_int = -1;
+            for i in 0..dev_count {
+                let d = unsafe { *devs.add(i) };
+                if d.matched && d.fd >= 0 {
+                    fd = d.fd;
+                    break;
+                }
+            }
+            unsafe { libc::free(devs as *mut c_void) };
+            if fd < 0 {
+                bail!("no touchscreen found");
+            }
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFL);
+                if flags >= 0 {
+                    libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
+            }
+            Ok(Touch {
+                fd,
+                touching: false,
+                was_touching: false,
+                x: 0,
+                y: 0,
+            })
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    impl Input for Touch {
+        fn next(&mut self, _busy: bool) -> Result<Event> {
+            let mut ev: InputEvent = unsafe { std::mem::zeroed() };
+            let n = unsafe {
+                libc::read(
+                    self.fd,
+                    &mut ev as *mut InputEvent as *mut c_void,
+                    std::mem::size_of::<InputEvent>(),
+                )
+            };
+            if n != std::mem::size_of::<InputEvent>() as isize {
+                // No event pending (non-blocking read); brief sleep so the
+                // loop doesn't busy-spin.
+                std::thread::sleep(Duration::from_millis(15));
+                return Ok(Event::Idle);
+            }
+            match ev.type_ {
+                fb::EV_ABS => match ev.code {
+                    fb::ABS_MT_POSITION_X => self.x = ev.value,
+                    fb::ABS_MT_POSITION_Y => self.y = ev.value,
+                    fb::ABS_MT_PRESSURE => self.touching = ev.value > 0,
+                    fb::ABS_MT_TRACKING_ID => self.touching = ev.value >= 0,
+                    _ => {}
+                },
+                fb::EV_KEY => {
+                    if ev.code == fb::BTN_TOUCH {
+                        self.touching = ev.value == 1;
+                    }
+                }
+                _ => {}
+            }
+            let lifted = self.was_touching && !self.touching;
+            self.was_touching = self.touching;
+            Ok(if lifted {
+                Event::Tap(self.x, self.y)
+            } else {
+                Event::Idle
+            })
+        }
+    }
+
+    // ── Headless: character grid + tap script ───────────────────────────────
+
+    /// Headless mode (`ui --script FILE --frames DIR`): the UI runs on a
+    /// [`Grid`] of `cols` × `rows` FBInk cells, taps come from `script`, and
+    /// every refresh is written to `frames/NNN.txt`.
+    pub struct Headless {
+        pub script: PathBuf,
+        pub frames: PathBuf,
+        pub cols: usize,
+        pub rows: usize,
+        /// Render with the real FBInk on a fake framebuffer as well (ARM
+        /// build only): adds `frames/NNN.pgm` screenshots.
+        pub fbink: bool,
+    }
+
+    /// FBInk's cell size with Terminus 8×16 at `FONT_MULT` 3; headless taps
+    /// are converted to pixels with it and back.
+    const CELL_W: usize = 8 * FONT_MULT as usize;
+    const CELL_H: usize = 16 * FONT_MULT as usize;
+
+    /// The headless stand-in for the framebuffer: FBInk's text grid as
+    /// characters, plus which cells are inverted. Mirrors what the UI relies
+    /// on from `fbink_print`: `is_centered` centres on the row, and text that
+    /// runs past the right edge wraps onto the next row at the same column —
+    /// which on the device garbles the screen, so it is recorded as overflow.
+    pub(crate) struct Grid {
+        cols: usize,
+        rows: usize,
+        cells: RefCell<Vec<Vec<(char, bool)>>>,
+        frames: PathBuf,
+        frame_no: Cell<usize>,
+        overflows: RefCell<Vec<String>>,
+    }
+
+    impl Grid {
+        fn new(cols: usize, rows: usize, frames: PathBuf) -> Self {
+            Grid {
+                cols,
+                rows,
+                cells: RefCell::new(vec![vec![(' ', false); cols]; rows]),
+                frames,
+                frame_no: Cell::new(0),
+                overflows: RefCell::new(Vec::new()),
+            }
+        }
+
+        /// The current screen, one string per row.
+        fn lines(&self) -> Vec<String> {
+            self.cells
+                .borrow()
+                .iter()
+                .map(|r| r.iter().map(|(c, _)| *c).collect())
+                .collect()
+        }
+
+        /// The cell in the middle of the first occurrence of `text`.
+        fn find(&self, text: &str) -> Option<(i16, i16)> {
+            self.lines().iter().enumerate().find_map(|(row, line)| {
+                let byte = line.find(text)?;
+                let col = line[..byte].chars().count() + text.chars().count() / 2;
+                Some((row as i16, col as i16))
+            })
+        }
+
+        fn render(&self, flash: bool) -> String {
+            let border = format!("+{}+", "-".repeat(self.cols));
+            let mut out = format!(
+                "frame {:03}  {}x{}  {}\n{border}\n",
+                self.frame_no.get(),
+                self.cols,
+                self.rows,
+                if flash { "flash" } else { "partial" }
+            );
+            for row in self.cells.borrow().iter() {
+                let text: String = row.iter().map(|(c, _)| *c).collect();
+                let inverted = row.iter().any(|(_, inv)| *inv);
+                out.push_str(&format!(
+                    "|{text}|{}\n",
+                    if inverted { " <inv" } else { "" }
+                ));
+            }
+            out.push_str(&border);
+            out.push('\n');
+            out
+        }
+    }
+
+    impl Display for Grid {
+        fn cols(&self) -> usize {
+            self.cols
+        }
+        fn rows(&self) -> usize {
+            self.rows
+        }
+        fn cell_at(&self, x: i32, y: i32) -> (i16, i16) {
+            let g = TouchGeometry {
+                cell_w: CELL_W,
+                cell_h: CELL_H,
+                screen_w: self.cols * CELL_W,
+                screen_h: self.rows * CELL_H,
+                ..TouchGeometry::default()
+            };
+            touch_to_cell(&g, x, y)
+        }
+        fn print(&self, row: i16, col: i16, text: &str, inverted: bool, centered: bool) {
+            let chars: Vec<char> = text.chars().collect();
+            let mut col = col.max(0) as usize;
+            if centered {
+                col += self.cols.saturating_sub(chars.len() + col) / 2;
+            }
+            let mut row = row.max(0) as usize;
+            if col + chars.len() > self.cols {
+                self.overflows.borrow_mut().push(format!(
+                    "frame {:03} row {row} col {col}: {} chars past the edge: {text:?}",
+                    self.frame_no.get() + 1,
+                    col + chars.len() - self.cols
+                ));
+            }
+            let start = col;
+            let mut cells = self.cells.borrow_mut();
+            for ch in chars {
+                if col >= self.cols {
+                    row += 1;
+                    col = start;
+                }
+                if row >= self.rows {
+                    break;
+                }
+                cells[row][col] = (ch, inverted);
+                col += 1;
+            }
+        }
+        fn cls(&self) {
+            for row in self.cells.borrow_mut().iter_mut() {
+                row.fill((' ', false));
+            }
+        }
+        fn refresh(&self, flash: bool) {
+            self.frame_no.set(self.frame_no.get() + 1);
+            let path = self.frames.join(format!("{:03}.txt", self.frame_no.get()));
+            if let Err(e) = std::fs::write(&path, self.render(flash)) {
+                eprintln!("warning: could not write {}: {e}", path.display());
+            }
+        }
+    }
+
+    /// One line of a headless tap script.
+    enum Command {
+        /// `tap ROW COL`: tap the middle of that cell.
+        Tap(i16, i16),
+        /// `tap TEXT`: tap the middle of the first occurrence of TEXT.
+        TapText(String),
+        /// `wait`: until no background search/removal is running.
+        Wait,
+    }
+
+    /// Parses a tap script: one command per line, `#` comments.
+    fn parse_script(src: &str) -> Result<Vec<(usize, Command)>> {
+        let mut out = Vec::new();
+        for (i, raw) in src.lines().enumerate() {
+            let line = raw.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (cmd, arg) = line.split_once(' ').unwrap_or((line, ""));
+            let arg = arg.trim();
+            let parsed = match cmd {
+                "wait" if arg.is_empty() => Command::Wait,
+                "tap" if !arg.is_empty() => {
+                    let nums: Vec<Option<i16>> =
+                        arg.split_whitespace().map(|n| n.parse().ok()).collect();
+                    match nums.as_slice() {
+                        [Some(r), Some(c)] => Command::Tap(*r, *c),
+                        _ => Command::TapText(arg.trim_matches('"').to_owned()),
+                    }
+                }
+                _ => {
+                    return Err(crate::error::UserError(format!(
+                        "script line {}: expected `tap ROW COL`, `tap TEXT` or `wait`, got {line:?}",
+                        i + 1
+                    ))
+                    .into());
+                }
+            };
+            out.push((i + 1, parsed));
+        }
+        Ok(out)
+    }
+
+    /// How long `wait` waits for a background search/removal.
+    const WAIT_LIMIT: Duration = Duration::from_secs(60);
+
+    struct Script<'a> {
+        grid: &'a Grid,
+        commands: std::collections::VecDeque<(usize, Command)>,
+        waiting_since: Option<std::time::Instant>,
+    }
+
+    impl Input for Script<'_> {
+        fn next(&mut self, busy: bool) -> Result<Event> {
+            let Some((line, cmd)) = self.commands.front() else {
+                return Ok(Event::Quit);
+            };
+            let line = *line;
+            let cell = match cmd {
+                Command::Wait => {
+                    if !busy {
+                        self.waiting_since = None;
+                        self.commands.pop_front();
+                        return Ok(Event::Idle);
+                    }
+                    let since = *self
+                        .waiting_since
+                        .get_or_insert_with(std::time::Instant::now);
+                    if since.elapsed() > WAIT_LIMIT {
+                        return Err(crate::error::UserError(format!(
+                            "script line {line}: still busy after {WAIT_LIMIT:?}"
+                        ))
+                        .into());
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                    return Ok(Event::Idle);
+                }
+                Command::Tap(r, c) => (*r, *c),
+                Command::TapText(text) => self.grid.find(text).ok_or_else(|| {
+                    crate::error::UserError(format!(
+                        "script line {line}: {text:?} is not on the screen:\n{}",
+                        self.grid.lines().join("\n")
+                    ))
+                })?,
+            };
+            self.commands.pop_front();
+            let (row, col) = cell;
+            Ok(Event::Tap(
+                col as i32 * CELL_W as i32 + CELL_W as i32 / 2,
+                row as i32 * CELL_H as i32 + CELL_H as i32 / 2,
+            ))
         }
     }
 
@@ -382,7 +787,7 @@ mod imp {
 
     /// UI layout + mutable state for one session.
     struct Ui<'a> {
-        fb: &'a Fb,
+        fb: &'a dyn Display,
         rows: Vec<crate::ui::BookRow>,
         total: usize,
         synced: usize,
@@ -401,13 +806,13 @@ mod imp {
 
     impl<'a> Ui<'a> {
         fn button_row(&self) -> i16 {
-            (self.fb.rows as i16 - BUTTON_OFFSET_FROM_BOTTOM).max(BOOK_START_ROW + 1)
+            (self.fb.rows() as i16 - BUTTON_OFFSET_FROM_BOTTOM).max(BOOK_START_ROW + 1)
         }
         fn util_row(&self) -> i16 {
-            (self.fb.rows as i16 - UTIL_OFFSET_FROM_BOTTOM).max(BOOK_START_ROW + 2)
+            (self.fb.rows() as i16 - UTIL_OFFSET_FROM_BOTTOM).max(BOOK_START_ROW + 2)
         }
         fn hint_row(&self) -> i16 {
-            self.fb.rows as i16 - HINT_OFFSET_FROM_BOTTOM
+            self.fb.rows() as i16 - HINT_OFFSET_FROM_BOTTOM
         }
         /// Book slots visible (2 rows each), reserving one row for the
         /// down-scroll indicator.
@@ -448,7 +853,7 @@ mod imp {
             fb.print(
                 TITLE_ROW,
                 0,
-                &pad_center("KindleStoryGraph", fb.cols),
+                &pad_center("KindleStoryGraph", fb.cols()),
                 true,
                 false,
             );
@@ -460,7 +865,7 @@ mod imp {
             fb.print(
                 STATUS_ROW_1,
                 2,
-                &pad_right(&last, fb.cols.saturating_sub(2)),
+                &pad_right(&last, fb.cols().saturating_sub(2)),
                 false,
                 false,
             );
@@ -474,7 +879,7 @@ mod imp {
                         self.synced,
                         self.total
                     ),
-                    fb.cols.saturating_sub(2),
+                    fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -487,7 +892,7 @@ mod imp {
             fb.print(
                 STATUS_ROW_3,
                 2,
-                &pad_right(session, fb.cols.saturating_sub(2)),
+                &pad_right(session, fb.cols().saturating_sub(2)),
                 false,
                 false,
             );
@@ -499,12 +904,12 @@ mod imp {
             fb.print(
                 btn,
                 2,
-                &t("  [ Sync now ]", "  [ Sync jetzt ]"),
+                t("  [ Sync now ]", "  [ Sync jetzt ]"),
                 false,
                 false,
             );
             let exit_label = t(" [ Exit ]", " [ Beenden ]");
-            let exit_col = self.fb.cols as i16 - exit_label.chars().count() as i16 - 2;
+            let exit_col = self.fb.cols() as i16 - exit_label.chars().count() as i16 - 2;
             fb.print(btn, exit_col.max(0), exit_label, false, false);
 
             // Util row: settings left, link right.
@@ -512,12 +917,12 @@ mod imp {
             fb.print(
                 util,
                 2,
-                &t("  [ Settings ]", "  [ Einstellungen ]"),
+                t("  [ Settings ]", "  [ Einstellungen ]"),
                 false,
                 false,
             );
             let link_label = t(" [ Link ]", " [ Verknüpfen ]");
-            let link_col = self.fb.cols as i16 - link_label.chars().count() as i16 - 2;
+            let link_col = self.fb.cols() as i16 - link_label.chars().count() as i16 - 2;
             fb.print(util, link_col.max(0), link_label, false, false);
 
             fb.print(
@@ -528,7 +933,7 @@ mod imp {
                         "Book = sync   ^ = up   v = down",
                         "Buch = Sync   ^ = hoch   v = runter",
                     ),
-                    self.fb.cols.saturating_sub(2),
+                    self.fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -583,7 +988,7 @@ mod imp {
             fb.print(
                 SECTION_ROW,
                 2,
-                &pad_right(&header, fb.cols.saturating_sub(2)),
+                &pad_right(&header, fb.cols().saturating_sub(2)),
                 up,
                 false,
             );
@@ -591,7 +996,7 @@ mod imp {
             let mut r = BOOK_START_ROW;
             for &i in list.iter().skip(self.list_offset).take(visible) {
                 let book = &self.rows[i];
-                let title = pad_right(&book.title, fb.cols.saturating_sub(2));
+                let title = pad_right(&book.title, fb.cols().saturating_sub(2));
                 let mut meta = format!(" {:>3.0}%", book.percent);
                 if !book.author.is_empty() {
                     meta.push_str(&format!("  {}", truncate_chars(&book.author, 24)));
@@ -601,7 +1006,7 @@ mod imp {
                 } else if book.allowlisted {
                     meta.push_str("  [sync]");
                 }
-                let meta = pad_right(&meta, fb.cols.saturating_sub(2));
+                let meta = pad_right(&meta, fb.cols().saturating_sub(2));
                 fb.print(r, 2, &title, book.allowlisted, false);
                 fb.print(r + 1, 2, &meta, book.allowlisted, false);
                 r += 2;
@@ -617,7 +1022,7 @@ mod imp {
                 fb.print(
                     self.down_nav_row(),
                     2,
-                    &pad_right(&label, fb.cols.saturating_sub(2)),
+                    &pad_right(&label, fb.cols().saturating_sub(2)),
                     true,
                     false,
                 );
@@ -629,7 +1034,7 @@ mod imp {
                 self.fb.print(
                     SECTION_ROW,
                     2,
-                    &pad_right(note, self.fb.cols.saturating_sub(2)),
+                    &pad_right(note, self.fb.cols().saturating_sub(2)),
                     true,
                     false,
                 );
@@ -643,7 +1048,7 @@ mod imp {
             fb.print(
                 TITLE_ROW,
                 0,
-                &pad_center("KindleStoryGraph", fb.cols),
+                &pad_center("KindleStoryGraph", fb.cols()),
                 true,
                 false,
             );
@@ -651,33 +1056,28 @@ mod imp {
                 STATUS_ROW_1,
                 2,
                 &pad_right(
-                    &t("Settings (read-only)", "Einstellungen (nur lesen)"),
-                    fb.cols.saturating_sub(2),
+                    t("Settings (read-only)", "Einstellungen (nur lesen)"),
+                    fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
             );
 
             let lines = super::settings_lines(&CONFIG);
-            let mut r = SECTION_ROW;
-            for line in &lines {
-                if r >= self.button_row() {
-                    break;
-                }
+            for (r, line) in (SECTION_ROW..self.button_row()).zip(&lines) {
                 fb.print(
                     r,
                     2,
-                    &pad_right(line, fb.cols.saturating_sub(2)),
+                    &pad_right(line, fb.cols().saturating_sub(2)),
                     false,
                     false,
                 );
-                r += 1;
             }
 
             fb.print(
                 self.button_row(),
                 2,
-                &t(" [ Back ]", " [ Zurück ]"),
+                t(" [ Back ]", " [ Zurück ]"),
                 false,
                 false,
             );
@@ -686,7 +1086,7 @@ mod imp {
                 2,
                 &pad_right(
                     t("Read-only - tap Back", "Nur lesen - Zurück antippen"),
-                    self.fb.cols.saturating_sub(2),
+                    self.fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -700,7 +1100,7 @@ mod imp {
             fb.print(
                 TITLE_ROW,
                 0,
-                &pad_center("KindleStoryGraph", fb.cols),
+                &pad_center("KindleStoryGraph", fb.cols()),
                 true,
                 false,
             );
@@ -708,8 +1108,8 @@ mod imp {
                 STATUS_ROW_1,
                 2,
                 &pad_right(
-                    &t("Link a book", "Buch verknüpfen"),
-                    fb.cols.saturating_sub(2),
+                    t("Link a book", "Buch verknüpfen"),
+                    fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -718,11 +1118,11 @@ mod imp {
                 STATUS_ROW_2,
                 2,
                 &pad_right(
-                    &t(
+                    t(
                         "Tap a book to search StoryGraph",
                         "Buch antippen = StoryGraph-Suche",
                     ),
-                    fb.cols.saturating_sub(2),
+                    fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -733,7 +1133,7 @@ mod imp {
             fb.print(
                 self.button_row(),
                 2,
-                &t(" [ Back ]", " [ Zurück ]"),
+                t(" [ Back ]", " [ Zurück ]"),
                 false,
                 false,
             );
@@ -741,7 +1141,7 @@ mod imp {
             // book, so `unsync_book` refuses it anyway.
             if !CONFIG.sync_all() {
                 let remove_label = t(" [ Remove ]", " [ Entfernen ]");
-                let remove_col = fb.cols as i16 - remove_label.chars().count() as i16 - 2;
+                let remove_col = fb.cols() as i16 - remove_label.chars().count() as i16 - 2;
                 fb.print(
                     self.button_row(),
                     remove_col.max(0),
@@ -758,7 +1158,7 @@ mod imp {
                         "Book = search   ^ = up   v = down",
                         "Buch = Suche   ^ = hoch   v = runter",
                     ),
-                    self.fb.cols.saturating_sub(2),
+                    self.fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -772,14 +1172,14 @@ mod imp {
             fb.print(
                 TITLE_ROW,
                 0,
-                &pad_center("KindleStoryGraph", fb.cols),
+                &pad_center("KindleStoryGraph", fb.cols()),
                 true,
                 false,
             );
             fb.print(
                 STATUS_ROW_2,
                 2,
-                &pad_right(&t("Searching...", "Suchen..."), fb.cols.saturating_sub(2)),
+                &pad_right(t("Searching...", "Suchen..."), fb.cols().saturating_sub(2)),
                 false,
                 false,
             );
@@ -792,8 +1192,8 @@ mod imp {
                 STATUS_ROW_3,
                 2,
                 &pad_right(
-                    &truncate_chars(&label, fb.cols.saturating_sub(2)),
-                    fb.cols.saturating_sub(2),
+                    &truncate_chars(&label, fb.cols().saturating_sub(2)),
+                    fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -801,7 +1201,7 @@ mod imp {
             fb.print(
                 self.button_row(),
                 2,
-                &t(" [ Cancel ]", " [ Abbrechen ]"),
+                t(" [ Cancel ]", " [ Abbrechen ]"),
                 false,
                 false,
             );
@@ -810,7 +1210,7 @@ mod imp {
                 2,
                 &pad_right(
                     t("Waiting for StoryGraph", "Warte auf StoryGraph"),
-                    self.fb.cols.saturating_sub(2),
+                    self.fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -822,7 +1222,7 @@ mod imp {
             fb.print(
                 TITLE_ROW,
                 0,
-                &pad_center("KindleStoryGraph", fb.cols),
+                &pad_center("KindleStoryGraph", fb.cols()),
                 true,
                 false,
             );
@@ -840,9 +1240,9 @@ mod imp {
                     &format!(
                         "{} {}",
                         t("Link:", "Verknüpfen:"),
-                        truncate_chars(&book_title, fb.cols.saturating_sub(10))
+                        truncate_chars(&book_title, fb.cols().saturating_sub(10))
                     ),
-                    fb.cols.saturating_sub(2),
+                    fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -867,14 +1267,13 @@ mod imp {
             fb.print(
                 SECTION_ROW,
                 2,
-                &pad_right(&header, fb.cols.saturating_sub(2)),
+                &pad_right(&header, fb.cols().saturating_sub(2)),
                 up,
                 false,
             );
 
-            let mut r = BOOK_START_ROW;
-            for i in self.pick_offset..(self.pick_offset + visible).min(total) {
-                let c = &self.candidates[i];
+            let shown = self.pick_offset..(self.pick_offset + visible).min(total);
+            for (r, c) in (BOOK_START_ROW..).zip(&self.candidates[shown]) {
                 let label = if c.author.is_empty() || c.author == "Unknown Author" {
                     c.title.clone()
                 } else {
@@ -883,11 +1282,10 @@ mod imp {
                 fb.print(
                     r,
                     2,
-                    &pad_right(&label, fb.cols.saturating_sub(2)),
+                    &pad_right(&label, fb.cols().saturating_sub(2)),
                     false,
                     false,
                 );
-                r += 1;
             }
 
             if down {
@@ -900,7 +1298,7 @@ mod imp {
                 fb.print(
                     self.button_row() - 1,
                     2,
-                    &pad_right(&label, fb.cols.saturating_sub(2)),
+                    &pad_right(&label, fb.cols().saturating_sub(2)),
                     true,
                     false,
                 );
@@ -909,7 +1307,7 @@ mod imp {
             fb.print(
                 self.button_row(),
                 2,
-                &t(" [ Back ]", " [ Zurück ]"),
+                t(" [ Back ]", " [ Zurück ]"),
                 false,
                 false,
             );
@@ -918,7 +1316,7 @@ mod imp {
                 2,
                 &pad_right(
                     t("Tap a match to link", "Treffer antippen = verknüpfen"),
-                    self.fb.cols.saturating_sub(2),
+                    self.fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -932,7 +1330,7 @@ mod imp {
             fb.print(
                 TITLE_ROW,
                 0,
-                &pad_center("KindleStoryGraph", fb.cols),
+                &pad_center("KindleStoryGraph", fb.cols()),
                 true,
                 false,
             );
@@ -941,7 +1339,7 @@ mod imp {
                 2,
                 &pad_right(
                     t("Remove from StoryGraph", "Von StoryGraph entfernen"),
-                    fb.cols.saturating_sub(2),
+                    fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -951,7 +1349,7 @@ mod imp {
                 2,
                 &pad_right(
                     t("Tap a synced book", "Synchronisiertes Buch antippen"),
-                    fb.cols.saturating_sub(2),
+                    fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -964,7 +1362,7 @@ mod imp {
                     2,
                     &pad_right(
                         t("(no synced books)", "(keine synchronisierten Bücher)"),
-                        fb.cols.saturating_sub(2),
+                        fb.cols().saturating_sub(2),
                     ),
                     false,
                     false,
@@ -986,7 +1384,7 @@ mod imp {
                         "Book = remove   ^ = up   v = down",
                         "Buch = entfernen   ^ = hoch   v = runter",
                     ),
-                    fb.cols.saturating_sub(2),
+                    fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -997,11 +1395,11 @@ mod imp {
 
         fn draw_remove_confirm(&self) {
             let fb = self.fb;
-            let width = fb.cols.saturating_sub(2);
+            let width = fb.cols().saturating_sub(2);
             fb.print(
                 TITLE_ROW,
                 0,
-                &pad_center("KindleStoryGraph", fb.cols),
+                &pad_center("KindleStoryGraph", fb.cols()),
                 true,
                 false,
             );
@@ -1048,7 +1446,7 @@ mod imp {
             let btn = self.button_row();
             fb.print(btn, 2, t(" [ Remove ]", " [ Entfernen ]"), false, false);
             let cancel_label = t(" [ Cancel ]", " [ Abbrechen ]");
-            let cancel_col = fb.cols as i16 - cancel_label.chars().count() as i16 - 2;
+            let cancel_col = fb.cols() as i16 - cancel_label.chars().count() as i16 - 2;
             fb.print(btn, cancel_col.max(0), cancel_label, false, false);
             fb.print(
                 self.util_row(),
@@ -1063,7 +1461,7 @@ mod imp {
                 &pad_right(
                     t(
                         "Completely = also delete history + review",
-                        "Komplett = auch Verlauf + Rezension löschen",
+                        "Komplett = löscht auch Verlauf + Rezension",
                     ),
                     width,
                 ),
@@ -1074,11 +1472,11 @@ mod imp {
 
         fn draw_remove_completely_confirm(&self) {
             let fb = self.fb;
-            let width = fb.cols.saturating_sub(2);
+            let width = fb.cols().saturating_sub(2);
             fb.print(
                 TITLE_ROW,
                 0,
-                &pad_center("KindleStoryGraph", fb.cols),
+                &pad_center("KindleStoryGraph", fb.cols()),
                 true,
                 false,
             );
@@ -1124,7 +1522,7 @@ mod imp {
             let btn = self.button_row();
             fb.print(btn, 2, t(" [ Delete ]", " [ Löschen ]"), false, false);
             let cancel_label = t(" [ Cancel ]", " [ Abbrechen ]");
-            let cancel_col = fb.cols as i16 - cancel_label.chars().count() as i16 - 2;
+            let cancel_col = fb.cols() as i16 - cancel_label.chars().count() as i16 - 2;
             fb.print(btn, cancel_col.max(0), cancel_label, false, false);
         }
 
@@ -1133,14 +1531,14 @@ mod imp {
             fb.print(
                 TITLE_ROW,
                 0,
-                &pad_center("KindleStoryGraph", fb.cols),
+                &pad_center("KindleStoryGraph", fb.cols()),
                 true,
                 false,
             );
             fb.print(
                 STATUS_ROW_2,
                 2,
-                &pad_right(t("Removing...", "Entferne..."), fb.cols.saturating_sub(2)),
+                &pad_right(t("Removing...", "Entferne..."), fb.cols().saturating_sub(2)),
                 false,
                 false,
             );
@@ -1152,7 +1550,7 @@ mod imp {
             fb.print(
                 STATUS_ROW_3,
                 2,
-                &pad_right(&label, fb.cols.saturating_sub(2)),
+                &pad_right(&label, fb.cols().saturating_sub(2)),
                 false,
                 false,
             );
@@ -1171,7 +1569,7 @@ mod imp {
                         "Back = keeps running in background",
                         "Zurück = läuft im Hintergrund weiter",
                     ),
-                    fb.cols.saturating_sub(2),
+                    fb.cols().saturating_sub(2),
                 ),
                 false,
                 false,
@@ -1181,9 +1579,7 @@ mod imp {
         // ── Tap handling ────────────────────────────────────────────────────
 
         fn tap(&mut self, x: i32, y: i32) -> Tap {
-            let (x, y) = self.fb.map_touch(x, y);
-            let row = ((y - self.fb.view_vert_origin as i32).max(0) / self.fb.fh as i32) as i16;
-            let col = (x.max(0) / self.fb.fw as i32) as i16;
+            let (row, col) = self.fb.cell_at(x, y);
             match self.screen {
                 Screen::Main => self.tap_main(row, col),
                 Screen::Settings => self.tap_settings(row, col),
@@ -1219,14 +1615,20 @@ mod imp {
         }
 
         fn tap_main(&mut self, row: i16, col: i16) -> Tap {
-            let half = self.fb.cols as i16 / 2;
+            let half = self.fb.cols() as i16 / 2;
             if row == self.button_row() {
                 if col >= half {
                     return Tap::Exit;
                 }
                 match self.sync_now() {
                     Ok(summary) => self.note = Some(summary),
-                    Err(e) => self.note = Some(format!("{e}")),
+                    Err(e) => {
+                        // The whole chain, classified like search/remove
+                        // errors: the outer context alone ("sync failed")
+                        // hid the cause.
+                        eprintln!("sync failed: {e:#}");
+                        self.note = Some(classify_network_error(&format!("{e:#}")));
+                    }
                 }
                 return Tap::Redraw;
             }
@@ -1270,7 +1672,7 @@ mod imp {
 
         fn tap_link(&mut self, row: i16, col: i16) -> Tap {
             if row == self.button_row() {
-                if col >= self.fb.cols as i16 / 2 && !CONFIG.sync_all() {
+                if col >= self.fb.cols() as i16 / 2 && !CONFIG.sync_all() {
                     if self.removing.is_some() {
                         self.note = Some(
                             t("A removal is still running", "Entfernen läuft noch").to_owned(),
@@ -1331,7 +1733,7 @@ mod imp {
             if row != self.button_row() {
                 return Tap::None;
             }
-            if col < self.fb.cols as i16 / 2 {
+            if col < self.fb.cols() as i16 / 2 {
                 self.start_remove(UnsyncMode::ToRead);
             } else {
                 self.screen = Screen::Remove;
@@ -1343,7 +1745,7 @@ mod imp {
             if row != self.button_row() {
                 return Tap::None;
             }
-            if col < self.fb.cols as i16 / 2 {
+            if col < self.fb.cols() as i16 / 2 {
                 self.start_remove(UnsyncMode::Completely);
             } else {
                 self.screen = Screen::RemoveConfirm;
@@ -1597,21 +1999,15 @@ mod imp {
             let state_path = Path::new(&CONFIG.state_path);
             match daemon::sync_once_from_paths(cc_db, state_path, false) {
                 Ok(outcomes) => {
-                    // Refresh the synced count after the pass.
-                    if let Ok(reader) = Reader::open_read_only(CONFIG.cc_db_path.as_str()) {
-                        if let Ok(snap) =
-                            reader.snapshot(CONFIG.finish_threshold, CONFIG.min_progress)
-                        {
-                            let allowlist = load_allowlist(Path::new(&CONFIG.allowlist_path));
-                            self.synced = snap
-                                .iter()
-                                .filter(|b| allowlist.contains(&b.cde_key))
-                                .count();
-                            self.total = snap.len();
-                        }
-                    }
-                    if let Ok(state) = State::load(state_path) {
-                        self.last_sync = state.books.values().map(|b| b.last_synced_at).max();
+                    // Reload the rows too, not just the counts: the pass put
+                    // books on the shelf, and the Remove list must offer them.
+                    if let Ok(loaded) = load_data() {
+                        self.rows = loaded.rows;
+                        self.total = loaded.total;
+                        self.synced = loaded.synced;
+                        self.last_sync = loaded.last_sync;
+                        let max = self.list().len().saturating_sub(self.visible_books());
+                        self.list_offset = self.list_offset.min(max);
                     }
                     self.note = None;
                     let changes = outcomes.iter().filter(|o| o.is_change()).count();
@@ -1619,6 +2015,23 @@ mod imp {
                         .iter()
                         .filter(|o| matches!(o, crate::sync::Outcome::Failed { .. }))
                         .count();
+                    // When nothing synced and every failure has the same
+                    // known cause (expired session, no cookies, no network),
+                    // name it: "1 failed (log)" sends the user to a log they
+                    // cannot read on the device.
+                    let causes: Vec<Option<&str>> = outcomes
+                        .iter()
+                        .filter_map(|o| match o {
+                            crate::sync::Outcome::Failed { error, .. } => Some(known_cause(error)),
+                            _ => None,
+                        })
+                        .collect();
+                    if changes == 0
+                        && let Some(Some(first)) = causes.first()
+                        && causes.iter().all(|c| *c == Some(*first))
+                    {
+                        return Ok((*first).to_owned());
+                    }
                     let summary = match (CONFIG.language.eq_ignore_ascii_case("de"), failed) {
                         (true, 0) => format!("Sync fertig: {changes} Änderungen"),
                         (true, f) => format!("Sync: {changes} Änderungen, {f} Fehler (Log)"),
@@ -1629,35 +2042,205 @@ mod imp {
                 }
                 Err(e) => {
                     self.note = None;
-                    Err(e.context("sync failed"))
+                    Err(e)
                 }
             }
         }
     }
 
-    pub fn run(open_remove: bool) -> Result<()> {
+    /// What the screens show, read from cc.db, the allowlist, the manual
+    /// mappings and `state.json`.
+    struct Loaded {
+        rows: Vec<crate::ui::BookRow>,
+        total: usize,
+        synced: usize,
+        last_sync: Option<i64>,
+        cookies_set: bool,
+    }
+
+    fn load_data() -> Result<Loaded> {
+        let reader = Reader::open_read_only(CONFIG.cc_db_path.as_str()).context("opening cc.db")?;
+        let snapshot = reader.snapshot(CONFIG.finish_threshold, CONFIG.min_progress)?;
+        let allowlist = load_allowlist(Path::new(&CONFIG.allowlist_path));
+        let state = State::load(Path::new(&CONFIG.state_path)).unwrap_or_default();
+        let linked = menu::linked_keys(Path::new(&CONFIG.manual_mappings_path), &state);
+        let on_shelf = state.books.keys().cloned().collect();
+        let rows = crate::ui::build_rows(&snapshot, &allowlist, &linked, &on_shelf);
+        Ok(Loaded {
+            total: snapshot.len(),
+            synced: rows.iter().filter(|b| b.allowlisted).count(),
+            last_sync: state.books.values().map(|b| b.last_synced_at).max(),
+            cookies_set: !CONFIG.session_cookie.is_empty(),
+            rows,
+        })
+    }
+
+    pub fn run(open_remove: bool, headless: Option<Headless>) -> Result<()> {
+        if let Some(h) = headless {
+            return run_headless(open_remove, h);
+        }
+        run_device(open_remove)
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    fn run_device(open_remove: bool) -> Result<()> {
         let fb = Fb::init()?;
+        let mut touch = Touch::open()?;
+        session(&fb, &mut touch, open_remove)
+    }
 
-        // Load data; on failure, show the error and wait for a tap.
-        let load = || -> Result<(Vec<crate::ui::BookRow>, usize, usize, Option<i64>, bool)> {
-            let reader =
-                Reader::open_read_only(CONFIG.cc_db_path.as_str()).context("opening cc.db")?;
-            let snapshot = reader.snapshot(CONFIG.finish_threshold, CONFIG.min_progress)?;
-            let allowlist = load_allowlist(Path::new(&CONFIG.allowlist_path));
-            let state = State::load(Path::new(&CONFIG.state_path)).unwrap_or_default();
-            let linked = menu::linked_keys(Path::new(&CONFIG.manual_mappings_path), &state);
-            let on_shelf = state.books.keys().cloned().collect();
-            let rows = crate::ui::build_rows(&snapshot, &allowlist, &linked, &on_shelf);
-            let total = snapshot.len();
-            let synced = rows.iter().filter(|b| b.allowlisted).count();
-            let last_sync = state.books.values().map(|b| b.last_synced_at).max();
-            let cookies_set = !CONFIG.session_cookie.is_empty();
-            Ok((rows, total, synced, last_sync, cookies_set))
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    fn run_device(_open_remove: bool) -> Result<()> {
+        eprintln!(
+            "The `ui` command only draws on the Kindle (ARM Linux); use --script/--frames \
+             to run it headless."
+        );
+        Ok(())
+    }
+
+    fn run_headless(open_remove: bool, h: Headless) -> Result<()> {
+        let src = std::fs::read_to_string(&h.script)
+            .with_context(|| format!("reading the tap script {}", h.script.display()))?;
+        let commands: std::collections::VecDeque<_> = parse_script(&src)?.into();
+        std::fs::create_dir_all(&h.frames)
+            .with_context(|| format!("creating {}", h.frames.display()))?;
+        if h.fbink {
+            return run_fbink_headless(open_remove, commands, h.frames);
+        }
+        if h.cols < 20 || h.rows < BOOK_START_ROW as usize + 6 {
+            return Err(crate::error::UserError(format!(
+                "headless screen {}x{} is too small",
+                h.cols, h.rows
+            ))
+            .into());
+        }
+        let grid = Grid::new(h.cols, h.rows, h.frames);
+        let mut script = Script {
+            grid: &grid,
+            commands,
+            waiting_since: None,
         };
+        session(&grid, &mut script, open_remove)?;
+        let overflows = grid.overflows.borrow();
+        if !overflows.is_empty() {
+            return Err(crate::error::UserError(format!(
+                "text ran past the right edge of the {}x{} screen (it wraps and garbles the \
+                 next row on the device):\n{}",
+                grid.cols,
+                grid.rows,
+                overflows.join("\n")
+            ))
+            .into());
+        }
+        Ok(())
+    }
 
-        let mut ui = match load() {
-            Ok((rows, total, synced, last_sync, cookies_set)) => Ui {
-                fb: &fb,
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    fn run_fbink_headless(
+        _open_remove: bool,
+        _commands: std::collections::VecDeque<(usize, Command)>,
+        _frames: PathBuf,
+    ) -> Result<()> {
+        Err(crate::error::UserError(
+            "--fbink needs the ARM build (FBInk is linked there only); run it in the virtual \
+             Kindle (just emu-shell)"
+                .to_owned(),
+        )
+        .into())
+    }
+
+    /// `ui --script --frames --fbink`: the real FBInk draws into a fake
+    /// framebuffer (vendor/fbink_headless), and a [`Grid`] of the same size
+    /// runs alongside for `tap TEXT` and the text frames.
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    fn run_fbink_headless(
+        open_remove: bool,
+        commands: std::collections::VecDeque<(usize, Command)>,
+        frames: PathBuf,
+    ) -> Result<()> {
+        let backing = frames.join(".fb0");
+        let c_path = CString::new(backing.display().to_string())?;
+        if unsafe { fb::ksg_shim_set_framebuffer(c_path.as_ptr()) } != 0 {
+            bail!(
+                "could not create the fake framebuffer {}",
+                backing.display()
+            );
+        }
+        let fb = Fb::init()?;
+        let grid = Grid::new(fb.cols, fb.rows, frames);
+        let tee = Tee {
+            fb: &fb,
+            grid: &grid,
+            backing,
+        };
+        let mut script = Script {
+            grid: &grid,
+            commands,
+            waiting_since: None,
+        };
+        session(&tee, &mut script, open_remove)
+    }
+
+    /// Draws on FBInk and on a [`Grid`]; each refresh also saves FBInk's
+    /// framebuffer as `NNN.pgm` next to the grid's `NNN.txt`.
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    struct Tee<'a> {
+        fb: &'a Fb,
+        grid: &'a Grid,
+        backing: PathBuf,
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    impl Display for Tee<'_> {
+        fn cols(&self) -> usize {
+            self.grid.cols()
+        }
+        fn rows(&self) -> usize {
+            self.grid.rows()
+        }
+        fn cell_at(&self, x: i32, y: i32) -> (i16, i16) {
+            self.grid.cell_at(x, y)
+        }
+        fn print(&self, row: i16, col: i16, text: &str, inverted: bool, centered: bool) {
+            self.fb.print(row, col, text, inverted, centered);
+            self.grid.print(row, col, text, inverted, centered);
+        }
+        fn cls(&self) {
+            self.fb.cls();
+            self.grid.cls();
+        }
+        fn refresh(&self, flash: bool) {
+            self.fb.refresh(flash);
+            self.grid.refresh(flash);
+            let (w, h) = (self.fb.touch.screen_w, self.fb.touch.screen_h);
+            let pgm = self
+                .grid
+                .frames
+                .join(format!("{:03}.pgm", self.grid.frame_no.get()));
+            let res = std::fs::read(&self.backing).and_then(|pixels| {
+                let mut out = format!("P5\n{w} {h}\n255\n").into_bytes();
+                out.extend_from_slice(&pixels[..(w * h).min(pixels.len())]);
+                std::fs::write(&pgm, out)
+            });
+            if let Err(e) = res {
+                eprintln!("warning: could not write {}: {e}", pgm.display());
+            }
+        }
+    }
+
+    /// The UI session on any display/input: load the data, draw, and handle
+    /// taps until Exit (or the end of a headless script).
+    fn session(display: &dyn Display, input: &mut dyn Input, open_remove: bool) -> Result<()> {
+        // Load data; on failure, show the error and wait for a tap.
+        let mut ui = match load_data() {
+            Ok(Loaded {
+                rows,
+                total,
+                synced,
+                last_sync,
+                cookies_set,
+            }) => Ui {
+                fb: display,
                 rows,
                 total,
                 synced,
@@ -1674,7 +2257,9 @@ mod imp {
                 removing: None,
             },
             Err(e) => {
-                show_error(&fb, &format!("{e:#}"));
+                show_error(display, &format!("{e:#}"));
+                // Wait for a single tap.
+                while let Event::Idle = input.next(false)? {}
                 return Ok(());
             }
         };
@@ -1697,161 +2282,159 @@ mod imp {
 
         ui.draw(true);
 
-        // Input loop. The touch fd is made non-blocking so the loop can also
-        // poll for a completed background search instead of freezing on a
-        // blocking read while the network is busy.
-        let touch_fd = open_touchscreen()?;
-        unsafe {
-            let flags = libc::fcntl(touch_fd, libc::F_GETFL);
-            if flags >= 0 {
-                libc::fcntl(touch_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-            }
-        }
-        let mut touching = false;
-        let mut was_touching = false;
-        let mut x = 0i32;
-        let mut y = 0i32;
-
         loop {
             let searched = ui.drain_search();
             let removed = ui.drain_remove();
             if searched || removed {
                 ui.draw(false);
             }
-
-            let mut ev: InputEvent = unsafe { std::mem::zeroed() };
-            let n = unsafe {
-                libc::read(
-                    touch_fd,
-                    &mut ev as *mut InputEvent as *mut c_void,
-                    std::mem::size_of::<InputEvent>(),
-                )
-            };
-            if n != std::mem::size_of::<InputEvent>() as isize {
-                // No event pending (non-blocking read); brief sleep so the
-                // loop doesn't busy-spin, then check the search channel again.
-                std::thread::sleep(Duration::from_millis(15));
-                continue;
-            }
-            match ev.type_ {
-                fb::EV_ABS => match ev.code {
-                    fb::ABS_MT_POSITION_X => x = ev.value,
-                    fb::ABS_MT_POSITION_Y => y = ev.value,
-                    fb::ABS_MT_PRESSURE => {
-                        touching = ev.value > 0;
-                    }
-                    fb::ABS_MT_TRACKING_ID => {
-                        touching = ev.value >= 0;
-                    }
-                    _ => {}
-                },
-                fb::EV_KEY => match ev.code {
-                    fb::BTN_TOUCH => touching = ev.value == 1,
-                    _ => {}
-                },
-                _ => {}
-            }
-            if was_touching && !touching {
-                match ui.tap(x, y) {
+            let busy = ui.search.is_some() || ui.removing.is_some();
+            match input.next(busy)? {
+                Event::Tap(x, y) => match ui.tap(x, y) {
                     Tap::Exit => break,
                     Tap::Redraw => ui.draw(false),
                     Tap::None => {}
-                }
+                },
+                Event::Idle => {}
+                Event::Quit => break,
             }
-            was_touching = touching;
         }
 
         // Restore a clean screen before returning to the launcher.
-        fb.cls();
-        fb.refresh(true);
+        display.cls();
+        display.refresh(true);
         Ok(())
     }
 
-    fn open_touchscreen() -> Result<c_int> {
-        let mut dev_count: usize = 0;
-        let devs = unsafe {
-            fb::fbink_input_scan(
-                fb::INPUT_TOUCHSCREEN | fb::INPUT_TABLET,
-                0,
-                fb::OPEN_BLOCKING | fb::NO_RECAP,
-                &mut dev_count,
-            )
-        };
-        if devs.is_null() || dev_count == 0 {
-            bail!("no input devices found");
-        }
-        let mut touch_fd: c_int = -1;
-        for i in 0..dev_count {
-            let d = unsafe { *devs.add(i) };
-            if d.matched && d.fd >= 0 {
-                touch_fd = d.fd;
-                break;
-            }
-        }
-        unsafe { libc::free(devs as *mut c_void) };
-        if touch_fd < 0 {
-            bail!("no touchscreen found");
-        }
-        Ok(touch_fd)
-    }
-
-    fn show_error(fb: &Fb, msg: &str) {
+    fn show_error(fb: &dyn Display, msg: &str) {
         fb.cls();
-        fb.print(0, 0, &pad_center("KindleStoryGraph", fb.cols), true, false);
+        fb.print(
+            0,
+            0,
+            &pad_center("KindleStoryGraph", fb.cols()),
+            true,
+            false,
+        );
         fb.print(
             2,
             2,
-            &pad_right(&t("Error:", "Fehler:"), fb.cols.saturating_sub(2)),
+            &pad_right(t("Error:", "Fehler:"), fb.cols().saturating_sub(2)),
             false,
             false,
         );
         // Wrap the message into roughly cols-wide lines.
+        let width = fb.cols().saturating_sub(4).clamp(1, 80);
+        let chars: Vec<char> = msg.chars().collect();
         let mut row = 3i16;
-        for chunk in msg.as_bytes().chunks(fb.cols.saturating_sub(2).min(80)) {
-            let line = String::from_utf8_lossy(chunk);
+        for chunk in chars.chunks(width) {
+            let line: String = chunk.iter().collect();
             fb.print(row, 2, &line, false, false);
             row += 1;
-            if row >= fb.rows as i16 - 1 {
+            if row >= fb.rows() as i16 - 2 {
                 break;
             }
         }
         let hint = t("Tap to close", "Zum Schließen antippen");
-        fb.print(fb.rows as i16 - 2, 2, &hint, false, false);
+        fb.print(fb.rows() as i16 - 2, 2, hint, false, false);
         fb.refresh(true);
+    }
 
-        // Wait for a single tap.
-        if let Ok(fd) = open_touchscreen() {
-            let mut touching = false;
-            let mut was = false;
-            loop {
-                let mut ev: InputEvent = unsafe { std::mem::zeroed() };
-                let n = unsafe {
-                    libc::read(
-                        fd,
-                        &mut ev as *mut InputEvent as *mut c_void,
-                        std::mem::size_of::<InputEvent>(),
-                    )
-                };
-                if n != std::mem::size_of::<InputEvent>() as isize {
-                    continue;
-                }
-                match ev.type_ {
-                    fb::EV_ABS => match ev.code {
-                        fb::ABS_MT_PRESSURE => touching = ev.value > 0,
-                        fb::ABS_MT_TRACKING_ID => touching = ev.value >= 0,
-                        _ => {}
-                    },
-                    fb::EV_KEY => match ev.code {
-                        fb::BTN_TOUCH => touching = ev.value == 1,
-                        _ => {}
-                    },
-                    _ => {}
-                }
-                if was && !touching {
-                    break;
-                }
-                was = touching;
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn geometry() -> TouchGeometry {
+            TouchGeometry {
+                cell_w: 24,
+                cell_h: 48,
+                view_vert_origin: 0,
+                screen_w: 1236,
+                screen_h: 1648,
+                ..TouchGeometry::default()
             }
+        }
+
+        #[test]
+        fn touch_maps_to_cells() {
+            let g = geometry();
+            assert_eq!(touch_to_cell(&g, 0, 0), (0, 0));
+            assert_eq!(touch_to_cell(&g, 23, 47), (0, 0));
+            assert_eq!(touch_to_cell(&g, 24, 48), (1, 1));
+            assert_eq!(touch_to_cell(&g, 1235, 1647), (34, 51));
+            // Negative raw values clamp to the first cell.
+            assert_eq!(touch_to_cell(&g, -5, -5), (0, 0));
+        }
+
+        #[test]
+        fn touch_quirks_swap_then_mirror_then_origin() {
+            let mut g = geometry();
+            g.swap_axes = true;
+            // Swapped: raw x is the panel's y.
+            assert_eq!(touch_to_cell(&g, 100, 50), (2, 2));
+            g.swap_axes = false;
+            g.mirror_x = true;
+            assert_eq!(touch_to_cell(&g, 0, 0), (0, 51));
+            g.mirror_x = false;
+            g.mirror_y = true;
+            assert_eq!(touch_to_cell(&g, 0, 0), (34, 0));
+            g.mirror_y = false;
+            g.view_vert_origin = 24;
+            assert_eq!(touch_to_cell(&g, 0, 60), (0, 0));
+            assert_eq!(touch_to_cell(&g, 0, 72), (1, 0));
+            // Swap is applied before mirroring.
+            let g = TouchGeometry {
+                swap_axes: true,
+                mirror_x: true,
+                ..geometry()
+            };
+            assert_eq!(touch_to_cell(&g, 0, 0), (0, 51));
+        }
+
+        fn grid(cols: usize, rows: usize) -> Grid {
+            Grid::new(cols, rows, std::env::temp_dir())
+        }
+
+        #[test]
+        fn grid_prints_centres_and_inverts() {
+            let g = grid(10, 3);
+            g.print(0, 1, "abc", false, false);
+            g.print(1, 0, "xy", true, true);
+            assert_eq!(g.lines(), vec![" abc      ", "    xy    ", "          "]);
+            assert!(g.render(false).contains("|    xy    | <inv"));
+            assert!(g.overflows.borrow().is_empty());
+            assert_eq!(g.find("xy"), Some((1, 5)));
+            assert_eq!(g.find("nope"), None);
+            g.cls();
+            assert_eq!(g.lines()[0], "          ");
+        }
+
+        #[test]
+        fn grid_wraps_and_records_overflow() {
+            let g = grid(6, 3);
+            g.print(0, 2, "abcdef", false, false);
+            assert_eq!(g.lines(), vec!["  abcd", "  ef  ", "      "]);
+            assert_eq!(g.overflows.borrow().len(), 1);
+            // Exactly up to the edge is fine.
+            let g = grid(6, 3);
+            g.print(0, 2, "abcd", false, false);
+            assert!(g.overflows.borrow().is_empty());
+            // Umlauts count as one cell each.
+            g.print(1, 0, "BÜCHER", false, false);
+            assert!(g.overflows.borrow().is_empty());
+        }
+
+        #[test]
+        fn script_parses_taps_text_and_wait() {
+            let cmds = parse_script("# comment\n\ntap 3 4\ntap [ Sync now ]\ntap \"Dune\"\nwait\n")
+                .unwrap();
+            assert_eq!(cmds.len(), 4);
+            assert!(matches!(cmds[0], (3, Command::Tap(3, 4))));
+            assert!(matches!(&cmds[1], (4, Command::TapText(t)) if t == "[ Sync now ]"));
+            assert!(matches!(&cmds[2], (5, Command::TapText(t)) if t == "Dune"));
+            assert!(matches!(cmds[3], (6, Command::Wait)));
+            assert!(parse_script("tap").is_err());
+            assert!(parse_script("wait 3").is_err());
+            assert!(parse_script("swipe 1 2").is_err());
         }
     }
 }
