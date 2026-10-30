@@ -24,6 +24,17 @@ package:
 lint:
     cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 
+# End-to-end tests: the host-built binary against the fake StoryGraph
+# (tests/e2e.rs, tests/e2e/fake_storygraph.py; needs python3). Also part of
+# `cargo test` / `just lint`; see docs/emulator.md.
+e2e-test:
+    cargo test --test e2e
+
+# Run the fake StoryGraph in the foreground for manual tries, e.g.
+# KSG_STORYGRAPH_BASE_URL=http://127.0.0.1:8080 cargo run -- search Dune
+fake-storygraph port="8080":
+    python3 -I tests/e2e/fake_storygraph.py --port {{port}}
+
 # Virtual Kindle: interactive busybox shell in an emulated ARM container with
 # the device file layout (requires `just build`; see docs/emulator.md).
 emu-shell:

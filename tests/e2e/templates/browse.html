@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<!--
+  Fake StoryGraph search results (tests/e2e). Mirrors what search() in
+  src/storygraph.rs expects (.book-title-author-and-series containers with a
+  /books/ and an /authors/ link, "N pages", "Format: audio" filtered); it is
+  NOT a captured StoryGraph page.
+-->
+<html>
+<head>
+  <meta name="csrf-token" content="$csrf">
+  <title>Browse | The StoryGraph</title>
+</head>
+<body>
+  <nav><a href="/">Home</a> <a href="/users/$user_slug">Profile</a></nav>
+  <h2>Search results for "$query"</h2>
+  $results
+</body>
+</html>

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<!--
+  Fake StoryGraph sign-in page (tests/e2e). login() in src/storygraph.rs needs
+  the CSRF token; NOT a captured StoryGraph page.
+-->
+<html>
+<head>
+  <meta name="csrf-token" content="$csrf">
+  <title>Sign in | The StoryGraph</title>
+</head>
+<body>
+  <form action="/users/sign_in" method="post">
+    <input type="hidden" name="authenticity_token" value="$csrf">
+    <input type="email" name="user[email]">
+    <input type="password" name="user[password]">
+    <input type="submit" name="commit" value="Sign in">
+  </form>
+</body>
+</html>

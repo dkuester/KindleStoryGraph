@@ -287,6 +287,19 @@ fn run(cmd: Command) -> anyhow::Result<()> {
                 .iter()
                 .filter(|o| matches!(o, kindlestorygraph::sync::Outcome::Failed { .. }))
                 .count();
+            // An expired session fails every book alike; say what to do
+            // about it instead of only counting failures.
+            let expired = outcomes.iter().any(|o| {
+                matches!(o, kindlestorygraph::sync::Outcome::Failed { error, .. }
+                    if error.contains(storygraph::SESSION_EXPIRED))
+            });
+            if expired {
+                return Err(UserError(format!(
+                    "{} ({failed} book(s) not synced.)",
+                    storygraph::SESSION_EXPIRED
+                ))
+                .into());
+            }
             if failed > 0 {
                 return Err(UserError(format!(
                     "{failed} book(s) failed to sync (see \"failed\" entries above); the others were synced."

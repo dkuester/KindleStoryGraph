@@ -1,0 +1,10 @@
+<!-- Shelved book: status label, progress bar and progress-form inputs
+     (mirrors parse_user_book in src/storygraph.rs, not a captured page). -->
+<div class="read-status-label">$status_label</div>
+$progress_bar
+<input type="hidden" name="read_status[last_reached_percent]" value="$percent">
+<input type="hidden" name="read_status[last_reached_pages]" value="$pages_read">
+<select class="read-status-progress-type" name="read_status[progress_type]">
+  <option value="pages">pages</option>
+  <option value="percentage" selected>%</option>
+</select>

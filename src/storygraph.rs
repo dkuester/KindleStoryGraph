@@ -29,6 +29,21 @@ use crate::error::UserError;
 
 pub const BASE_URL: &str = "https://app.thestorygraph.com";
 
+/// Test-only override of [`BASE_URL`], for the fake StoryGraph the end-to-end
+/// tests run (`tests/e2e/`). Only plain-HTTP loopback with an explicit port is
+/// accepted (see [`validate_test_base_url`]): the session cookies are sent to
+/// whatever host this names, so it must never point anywhere else.
+pub const BASE_URL_ENV: &str = "KSG_STORYGRAPH_BASE_URL";
+
+/// Test-only override of the search timeout in milliseconds, so the e2e tests
+/// can exercise a hung search without waiting 15 s per attempt. Honoured only
+/// together with [`BASE_URL_ENV`].
+pub const SEARCH_TIMEOUT_ENV: &str = "KSG_STORYGRAPH_SEARCH_TIMEOUT_MS";
+
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
+
+pub const SESSION_EXPIRED: &str = "StoryGraph session has expired. Please update session_cookie and remember_user_token in config.ini.";
+
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 
 macro_rules! debug_log {
@@ -134,6 +149,66 @@ struct PageData {
     book_pages: String,
 }
 
+// ── Base URL ──────────────────────────────────────────────────────────────────
+
+/// Checks a [`BASE_URL_ENV`] value and returns it normalised as
+/// `http://<host>:<port>`. Anything but `http://127.0.0.1:<port>` or
+/// `http://localhost:<port>` (no credentials, path, query or fragment) is
+/// refused.
+pub fn validate_test_base_url(raw: &str) -> Result<String, String> {
+    let refuse = |why: &str| {
+        Err(format!(
+            "{BASE_URL_ENV}={raw:?} refused ({why}): only http://127.0.0.1:<port> or \
+             http://localhost:<port> is allowed (test servers only)."
+        ))
+    };
+    let Ok(url) = Url::parse(raw) else {
+        return refuse("not a URL");
+    };
+    if url.scheme() != "http" {
+        return refuse("scheme must be http");
+    }
+    let host = match url.host_str() {
+        Some(h @ ("127.0.0.1" | "localhost")) => h,
+        _ => return refuse("host must be 127.0.0.1 or localhost"),
+    };
+    let Some(port) = url.port() else {
+        return refuse("an explicit port is required");
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return refuse("credentials are not allowed");
+    }
+    if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
+        return refuse("path, query and fragment are not allowed");
+    }
+    Ok(format!("http://{host}:{port}"))
+}
+
+/// The StoryGraph origin: [`BASE_URL`], or a validated [`BASE_URL_ENV`]
+/// override. An invalid override is an error rather than a fallback, so a
+/// misconfigured test can never reach the real site.
+static BASE: LazyLock<Result<String, String>> =
+    LazyLock::new(|| match std::env::var(BASE_URL_ENV) {
+        Ok(v) if !v.is_empty() => validate_test_base_url(&v),
+        _ => Ok(BASE_URL.to_owned()),
+    });
+
+fn base_url() -> Result<&'static str> {
+    match &*BASE {
+        Ok(b) => Ok(b),
+        Err(e) => Err(UserError(e.clone()).into()),
+    }
+}
+
+fn search_timeout() -> Duration {
+    let overridden = matches!(&*BASE, Ok(b) if b != BASE_URL);
+    overridden
+        .then(|| std::env::var(SEARCH_TIMEOUT_ENV).ok()?.parse().ok())
+        .flatten()
+        .map(Duration::from_millis)
+        .unwrap_or(SEARCH_TIMEOUT)
+}
+
 // ── Singleton client ──────────────────────────────────────────────────────────
 
 fn build_client(jar: Arc<Jar>) -> Result<Client, reqwest::Error> {
@@ -149,8 +224,8 @@ fn build_client(jar: Arc<Jar>) -> Result<Client, reqwest::Error> {
         .build()
 }
 
-static CLIENT: LazyLock<Result<Client, reqwest::Error>> = LazyLock::new(|| {
-    let base: Url = BASE_URL.parse().expect("BASE_URL is valid");
+static CLIENT: LazyLock<Result<Client>> = LazyLock::new(|| {
+    let base: Url = base_url()?.parse().context("invalid base URL")?;
     let jar = Arc::new(Jar::default());
 
     // Pre-seed auth cookies from config.
@@ -165,11 +240,11 @@ static CLIENT: LazyLock<Result<Client, reqwest::Error>> = LazyLock::new(|| {
     jar.add_cookie_str("cookies_popup_seen=yes", &base);
     jar.add_cookie_str("plus_popup_seen=yes", &base);
 
-    build_client(jar)
+    build_client(jar).context("Failed to construct HTTP client")
 });
 
 fn client() -> Result<&'static Client> {
-    CLIENT.as_ref().context("Failed to construct HTTP client")
+    CLIENT.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))
 }
 
 // ── Guards ────────────────────────────────────────────────────────────────────
@@ -187,9 +262,7 @@ fn require_credentials() -> Result<()> {
 /// Returns Err if the final response URL ended up on the sign-in page.
 fn check_session(response: &Response) -> Result<()> {
     if response.url().path().contains("/users/sign_in") {
-        bail!(
-            "StoryGraph session has expired. Please update session_cookie and remember_user_token in config.ini."
-        );
+        return Err(UserError(SESSION_EXPIRED.to_owned()).into());
     }
     Ok(())
 }
@@ -204,7 +277,7 @@ fn get(path: &str) -> Result<String> {
 /// background thread and needs a bounded wait so a hung network can't leave the
 /// e-ink screen stuck on "Searching…" forever.
 fn get_timeout(path: &str, timeout: Option<Duration>) -> Result<String> {
-    let url = format!("{BASE_URL}{path}");
+    let url = format!("{}{path}", base_url()?);
     debug_log!("GET {url}");
 
     let res = retry(Exponential::from_millis(500).map(jitter).take(3), || {
@@ -224,7 +297,8 @@ fn get_timeout(path: &str, timeout: Option<Duration>) -> Result<String> {
 }
 
 fn post_form(path: &str, fields: &[(&str, &str)]) -> Result<String> {
-    let url = format!("{BASE_URL}{path}");
+    let base = base_url()?;
+    let url = format!("{base}{path}");
     debug_log!("POST {url}");
 
     let csrf = fields
@@ -241,7 +315,7 @@ fn post_form(path: &str, fields: &[(&str, &str)]) -> Result<String> {
                 "Accept",
                 "text/javascript, application/javascript, application/ecmascript, */*; q=0.01",
             )
-            .header("Origin", BASE_URL)
+            .header("Origin", base)
             .header("Referer", &url)
             .header("X-CSRF-Token", csrf)
             .form(fields)
@@ -258,9 +332,7 @@ fn post_form(path: &str, fields: &[(&str, &str)]) -> Result<String> {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         if location.contains("/users/sign_in") {
-            bail!(
-                "StoryGraph session has expired. Please update session_cookie and remember_user_token in config.ini."
-            );
+            return Err(UserError(SESSION_EXPIRED.to_owned()).into());
         }
         return Ok(String::new());
     }
@@ -429,9 +501,15 @@ pub fn search(query: &str) -> Result<Vec<Book>> {
     require_credentials()?;
     let html = get_timeout(
         &format!("/browse?search_term={}", urlencoding::encode(query)),
-        Some(Duration::from_secs(15)),
+        Some(search_timeout()),
     )?;
-    let doc = Html::parse_document(&html);
+    let results = parse_search_results(&html);
+    debug_log!("search({query:?}) → {} results", results.len());
+    Ok(results)
+}
+
+fn parse_search_results(html: &str) -> Vec<Book> {
+    let doc = Html::parse_document(html);
 
     let container_sel = Selector::parse(".book-title-author-and-series").expect("valid selector");
     let title_sel = Selector::parse(r#"a[href^="/books/"]"#).expect("valid selector");
@@ -457,8 +535,15 @@ pub fn search(query: &str) -> Result<Vec<Book>> {
                     continue;
                 }
 
-                // Skip audio editions based on format info in nearby text
-                let pane_text = container_html.to_lowercase();
+                // Skip audio editions based on format info in nearby text.
+                // Text nodes, not the raw HTML: StoryGraph's edition line
+                // starts right after a tag (`<p>541 pages • …`), so a
+                // whitespace split of the markup glued "<p>541" together.
+                let pane_text = container
+                    .text()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase();
                 if pane_text.contains("format: audio") {
                     continue;
                 }
@@ -489,8 +574,7 @@ pub fn search(query: &str) -> Result<Vec<Book>> {
         }
     }
 
-    debug_log!("search({query:?}) → {} results", results.len());
-    Ok(results)
+    results
 }
 
 /// Scores how well `result_title` matches `query_title` as the F1 of word
@@ -841,11 +925,12 @@ pub fn update_progress(book_id: &str, progress_type: &str, value: u32) -> Result
 /// lifted or a valid `cf_clearance` cookie is already present in the jar
 /// (e.g. pre-seeded from a browser session).
 pub fn login(email: &str, password: &str) -> Result<LoginResult> {
-    let base: Url = BASE_URL.parse().expect("BASE_URL is valid");
+    let base_str = base_url()?;
+    let base: Url = base_str.parse().context("invalid base URL")?;
     let jar = Arc::new(Jar::default());
     let client = build_client(jar.clone()).context("Failed to build login client")?;
 
-    let sign_in_url = format!("{BASE_URL}/users/sign_in");
+    let sign_in_url = format!("{base_str}/users/sign_in");
 
     // 1. Load the sign-in page to obtain a CSRF token.
     let res = client
@@ -858,7 +943,7 @@ pub fn login(email: &str, password: &str) -> Result<LoginResult> {
     // 2. Submit credentials, mirroring the browser form.
     let res = client
         .post(&sign_in_url)
-        .header("Origin", BASE_URL)
+        .header("Origin", base_str)
         .header("Referer", &sign_in_url)
         .form(&[
             ("authenticity_token", csrf.as_str()),
@@ -1044,6 +1129,46 @@ mod tests {
         assert_eq!(status_to_str(5), "did-not-finish");
         assert_eq!(status_to_str(6), "rereading");
         assert_eq!(status_to_str(99), "currently-reading"); // unknown falls back
+    }
+
+    #[test]
+    fn search_page_count_right_after_a_tag() {
+        let html = r#"<div class="book-title-author-and-series">
+            <h3><a href="/books/b1">Dune</a></h3><a href="/authors/x">Frank Herbert</a>
+            <p>688 pages &bull; digital</p></div>"#;
+        let books = parse_search_results(html);
+        assert_eq!(books.len(), 1);
+        assert_eq!(books[0].pages, 688);
+    }
+
+    #[test]
+    fn test_base_url_accepts_loopback_only() {
+        assert_eq!(
+            validate_test_base_url("http://127.0.0.1:8123").as_deref(),
+            Ok("http://127.0.0.1:8123")
+        );
+        assert_eq!(
+            validate_test_base_url("http://localhost:9000/").as_deref(),
+            Ok("http://localhost:9000")
+        );
+        for bad in [
+            "https://127.0.0.1:8123",          // TLS: never a local fake
+            "http://app.thestorygraph.com:80", // the real site
+            "http://example.com:8123",         // any other host
+            "http://127.0.0.1.evil.test:8123", // loopback-looking prefix
+            "http://localhost@evil.test:8123", // userinfo trick
+            "http://user:pw@127.0.0.1:8123",   // credentials
+            "http://127.0.0.2:8123",           // other loopback addresses
+            "http://[::1]:8123",               // not on the list
+            "http://0.0.0.0:8123",             // wildcard
+            "http://127.0.0.1",                // no explicit port
+            "http://127.0.0.1:8123/books",     // path
+            "http://127.0.0.1:8123/?x=1",      // query
+            "127.0.0.1:8123",                  // not a URL with a scheme
+            "",
+        ] {
+            assert!(validate_test_base_url(bad).is_err(), "{bad:?} accepted");
+        }
     }
 
     #[test]
