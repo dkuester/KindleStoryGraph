@@ -242,6 +242,26 @@ struct Ui {
     /// open directly on the "Remove from StoryGraph" list (the KUAL entry)
     #[argh(switch)]
     remove: bool,
+
+    /// headless (tests, any host): read taps from this script instead of
+    /// the touchscreen (`tap ROW COL`, `tap TEXT`, `wait`); needs --frames
+    #[argh(option)]
+    script: Option<String>,
+
+    /// headless: write every screen refresh to DIR/NNN.txt
+    #[argh(option)]
+    frames: Option<String>,
+
+    /// headless screen size in FBInk cells, COLSxROWS (default 51x34, the
+    /// Paperwhite 11th gen; 44x30 is the Kindle 2022/2024)
+    #[argh(option, default = "String::from(\"51x34\")")]
+    size: String,
+
+    /// headless on the ARM build (virtual Kindle): render with the real FBInk
+    /// into a fake Paperwhite framebuffer and also write DIR/NNN.pgm
+    /// screenshots; the screen size then comes from FBInk, not --size
+    #[argh(switch)]
+    fbink: bool,
 }
 
 fn main() {
@@ -423,7 +443,34 @@ fn run(cmd: Command) -> anyhow::Result<()> {
             setup::doctor(&cc_db, d.network)?;
         }
         Command::ImportCookies(i) => setup::import_cookies(Path::new(&i.path))?,
-        Command::Ui(u) => kindlestorygraph::ui::run(u.remove)?,
+        Command::Ui(u) => {
+            let headless = match (u.script, u.frames) {
+                (Some(script), Some(frames)) => {
+                    let (cols, rows) = u
+                        .size
+                        .split_once('x')
+                        .and_then(|(c, r)| Some((c.parse().ok()?, r.parse().ok()?)))
+                        .ok_or_else(|| {
+                            UserError(format!("--size {:?}: expected COLSxROWS", u.size))
+                        })?;
+                    Some(kindlestorygraph::ui::Headless {
+                        script: script.into(),
+                        frames: frames.into(),
+                        cols,
+                        rows,
+                        fbink: u.fbink,
+                    })
+                }
+                (None, None) if !u.fbink => None,
+                _ => {
+                    return Err(UserError(
+                        "--script and --frames go together (and --fbink needs both)".to_owned(),
+                    )
+                    .into());
+                }
+            };
+            kindlestorygraph::ui::run(u.remove, headless)?
+        }
     }
     Ok(())
 }

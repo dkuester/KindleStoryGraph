@@ -15,9 +15,19 @@ fn main() {
         return;
     }
 
+    // The headless shim (vendor/fbink_headless): force-included into every
+    // FBInk unit so its open()/ioctl() go through ksg_shim_*(), which pass
+    // through unless the UI runs with `--fbink` in the virtual Kindle.
+    let shim_h = format!(
+        "{}/vendor/fbink_headless/shim.h",
+        env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_owned())
+    );
+
     let mut build = cc::Build::new();
     build
         .include("vendor/fbink")
+        .flag("-include")
+        .flag(&shim_h)
         .file("vendor/fbink/fbink.c")
         .file("vendor/fbink/cutef8/utf8.c")
         .file("vendor/fbink/cutef8/dfa.c")
@@ -41,6 +51,16 @@ fn main() {
 
     build.compile("fbink");
 
+    // Compiled without the forced include: it calls the real open()/ioctl().
+    // Linked after libfbink, which references it.
+    let mut shim = cc::Build::new();
+    shim.file("vendor/fbink_headless/shim.c").warnings(false);
+    if target.contains("musl") {
+        shim.compiler(format!("{target}-gcc"));
+    }
+    shim.compile("ksgfbinkshim");
+
     println!("cargo:rustc-link-lib=static=fbink");
     println!("cargo:rerun-if-changed=vendor/fbink/");
+    println!("cargo:rerun-if-changed=vendor/fbink_headless/");
 }

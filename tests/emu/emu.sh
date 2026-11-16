@@ -11,7 +11,8 @@
 #   target/emu/run/mnt/us   -> /mnt/us     (extension as `just package` lays it out)
 #   target/emu/run/var/local -> /var/local (cc.db built from tests/emu/cc_fixture.sql)
 #
-# The smoke suite also runs one sync against the fake StoryGraph (stage 2,
+# The smoke suite also runs one sync and one headless UI session (stage 3,
+# `ui --script`) against the fake StoryGraph (stage 2,
 # tests/e2e/fake_storygraph.py): the fake runs in a native python container
 # with --network none, and the emulated Kindle joins that container's network
 # namespace, so both share a loopback interface and nothing else — the
@@ -134,6 +135,24 @@ for g in m["items"]:
 time_action() {
     kx "read a _ < /proc/uptime; sh -c \"$1\" >/dev/null 2>&1; read b _ < /proc/uptime; echo \$a \$b" |
         awk '{ printf "%.0f", ($2 - $1) * 1000 }'
+}
+
+# Every FBInk screenshot (PGM, 8 bpp) is 1236x1648 and has both black and
+# white pixels, i.e. FBInk actually drew text into the fake framebuffer; the
+# last one (exit) is blank white.
+pgms_drawn() {
+    python3 -I -c 'import pathlib, sys
+pgms = sorted(pathlib.Path(sys.argv[1]).glob("*.pgm"))
+assert pgms, "no .pgm frames"
+for p in pgms:
+    data = p.read_bytes()
+    head, px = data[:17], data[17:]
+    assert head == b"P5\n1236 1648\n255\n", (p, head)
+    assert len(px) == 1236 * 1648, p
+    if p == pgms[-1]:
+        assert set(px) == {255}, (p, "exit should leave a blank white screen")
+    else:
+        assert 0 in px and 255 in px, (p, "no text drawn")' "$1"
 }
 
 # The fake StoryGraph's /__state, read inside its own container.
@@ -291,6 +310,19 @@ cmd_test() {
         check "state.json links Dune" grep -q '"dune-0001"' "$EXT/state.json"
         out=$(kx "KSG_STORYGRAPH_BASE_URL=http://example.com:8080 KINDLE_STORYGRAPH_CONFIG=$DEV_EXT/config.ini bin/kindlestorygraph whoami") && rc=0 || rc=$?
         check "non-loopback base URL refused (exit $rc)" contains "$out" "refused"
+
+        echo "headless UI against the fake StoryGraph (stage 3)"
+        kx "printf '%s\\n' 'tap [ Link ]' 'tap [ Remove ]' 'tap Dune' 'tap [ Remove ]' wait 'tap [ Exit ]' > /tmp/ui.script" >/dev/null
+        # --fbink: the real FBInk renders into a fake framebuffer; the frames
+        # (NNN.txt + NNN.pgm screenshots) land in target/emu/run/var/local/ui-frames.
+        out=$(kx "KSG_STORYGRAPH_BASE_URL=$FAKE_URL KINDLE_STORYGRAPH_CONFIG=$DEV_EXT/config.ini bin/kindlestorygraph ui --script /tmp/ui.script --frames /var/local/ui-frames --fbink 2>&1 | grep -v 'Not running on a Kindle'") && rc=0 || rc=$?
+        check "ui --script --fbink exits 0 under qemu${out:+: $out}" [ -z "$out" ]
+        check "FBInk screenshots drawn (text in every .pgm, blank white on exit)" pgms_drawn "$RUN/var/local/ui-frames"
+        out=$(cat "$RUN"/var/local/ui-frames/*.txt)
+        check "ui frames: Remove list offers the synced book" contains "$out" "Remove from StoryGraph?"
+        check "ui frames: 'Removed: Dune'" contains "$out" "Removed: Dune"
+        check "server: Dune back to to-read" contains "$(fake_state)" '"dune-0001": {"status": "to-read"'
+        check "allowlist no longer has Dune" bash -c "! grep -qx B00DUNE001 '$EXT/allowlist.ini'"
         mv "$EXT/config.ini.bak" "$EXT/config.ini"
     fi
 

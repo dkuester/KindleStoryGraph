@@ -195,6 +195,7 @@ pub struct InputEvent {
 }
 
 #[link(name = "fbink", kind = "static")]
+#[link(name = "ksgfbinkshim", kind = "static")]
 unsafe extern "C" {
     pub fn fbink_open() -> c_int;
     pub fn fbink_close(fbfd: c_int) -> c_int;
@@ -222,6 +223,9 @@ unsafe extern "C" {
         no_rota: bool,
         y: u8,
     ) -> c_int;
+    /// The headless shim (vendor/fbink_headless/shim.c): back `/dev/fb0`
+    /// with the file at `path` from now on. 0 on success.
+    pub fn ksg_shim_set_framebuffer(path: *const c_char) -> c_int;
     pub fn fbink_input_scan(
         match_types: u32,
         exclude_types: u32,

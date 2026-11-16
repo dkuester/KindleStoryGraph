@@ -30,6 +30,12 @@ lint:
 e2e-test:
     cargo test --test e2e
 
+# Headless UI tests: the FBInk UI on a character grid, driven by tap
+# scripts against the fake StoryGraph (tests/ui.rs; golden frames in
+# tests/ui/golden, regenerate with UPDATE_GOLDEN=1). Also part of `cargo test`.
+ui-test:
+    cargo test --test ui
+
 # Run the fake StoryGraph in the foreground for manual tries, e.g.
 # KSG_STORYGRAPH_BASE_URL=http://127.0.0.1:8080 cargo run -- search Dune
 fake-storygraph port="8080":

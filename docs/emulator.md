@@ -77,13 +77,22 @@ pulling the `alpine` and `python` images once):
   allowlisted books attached (the same-title book to the right author's
   edition), the shelf checked on the server side, `state.json` written; a
   non-loopback `KSG_STORYGRAPH_BASE_URL` refused
+- one headless UI session with the real FBInk (`ui --script … --fbink`):
+  Link → Remove → Dune → Remove, checked in the text frames, on the server
+  and in the allowlist; every FBInk screenshot has text, the last one is
+  blank. The frames stay in `target/emu/run/var/local/ui-frames/` (CI uploads
+  them as the `ui-frames` artifact)
 
 CI runs the same suite in the `emu-test` job.
 
 ## What stays a device test
 
-- touch input, e-ink drawing and refresh (the FBInk UI); the emulator has no
-  framebuffer
+- the touch panel itself (raw coordinates, axis quirks of the real
+  hardware) and the e-ink refresh (waveforms, ghosting, flashing); the
+  emulator has no panel. The UI's screens, taps and FBInk's drawing are
+  covered headless (see [Stage 3](#stage-3-headless-ui))
+- device-specific FBInk behaviour: in the emulator FBInk cannot identify
+  the model (no `/proc/usid`), so it runs with generic Kindle defaults
 - KUAL Next itself: menu rendering, `exitmenu`/`refresh` behaviour and the
   real ~250 ms refresh race
 - cc.db while the framework holds it open (locking, WAL)
@@ -183,3 +192,72 @@ So the live-account checks stay in the device checklist: one real sync, one
 `unsync` and a look at the StoryGraph shelf after each release. When a live
 check finds new markup, change the parser, the templates and their test
 together.
+
+## Stage 3: headless UI
+
+The on-device settings UI (`ui`, the FBInk screens behind the KUAL entries)
+used to be testable only on the Kindle. Its screens and tap handling now
+talk to a small display and input interface instead of FBInk and the
+touchscreen directly, so the same code runs in three ways:
+
+| Mode | Display | Input | Where |
+|---|---|---|---|
+| `ui` | FBInk on `/dev/fb0` | touchscreen | the Kindle |
+| `ui --script S --frames D [--size 51x34]` | character grid with FBInk's cell geometry | tap script | any host (`cargo test`) |
+| `ui --script S --frames D --fbink` | the real FBInk on a fake framebuffer, plus the grid | tap script | ARM build: the virtual Kindle |
+
+### Tap scripts and frames
+
+One command per line, `#` comments:
+
+- `tap TEXT` taps the middle of the first occurrence of TEXT on the current
+  screen (`tap [ Sync now ]`, `tap Dune`); a missing text fails with the
+  screen dumped
+- `tap ROW COL` taps that cell
+- `wait` waits until a background search or removal has finished (the UI
+  keeps polling and redrawing meanwhile, as on the device)
+
+Every screen refresh is written to `D/NNN.txt`: the grid with `<inv` after
+inverted rows. Text that runs past the right edge (on the device it wraps
+and garbles the next row) makes the run exit non-zero, so each green run
+also proves the screens fit. `--size` takes the screen in FBInk cells
+(Terminus 8×16 at font size 3): `51x34` is the Paperwhite 11th gen, `44x30`
+the Kindle 2022/2024.
+
+With `--fbink` (ARM only) the screen size comes from FBInk itself, and
+every refresh also writes `D/NNN.pgm`, a 1236×1648 screenshot of what FBInk
+drew, with the device font. Open it with any image viewer (macOS Preview;
+`sips -s format png 001.pgm --out 001.png` converts it). This works through
+a small shim (`vendor/fbink_headless/`) compiled into FBInk: it routes
+FBInk's `open()`/`ioctl()` through pass-through wrappers that, only after
+`--fbink` switched them on, back `/dev/fb0` with a file and answer the
+screen-info ioctls with Paperwhite 11th gen values. Without `--fbink` (on
+the device) every call goes straight to libc.
+
+### What the UI tests cover (`tests/ui.rs`, `just ui-test`)
+
+- a tour of every screen (main, settings, link search and pick list, remove
+  list, remove confirmation, "remove completely" confirmation, progress
+  screens) in English on the Paperwhite and in German on the Kindle Basic
+  size, compared with golden frames in `tests/ui/golden/` and checked for
+  cut-off text; after an intended layout change run
+  `UPDATE_GOLDEN=1 cargo test --test ui` and review the diff
+- Sync now → Remove in one session, remove completely from the KUAL entry
+  (`--remove`), toggling books, paging a long list on the small screen,
+  cancelling a slow search
+- error lines: expired session (sync, search and remove), another sync
+  pass holding the lock, StoryGraph 500, missing cookies, a missing cc.db
+  (error screen, closed by a tap)
+- the server side through the fake StoryGraph and the files on disk
+  (allowlist, manual mappings, `state.json`) for each flow
+- unit tests for the touch mapping (swap, mirror, viewport origin), the
+  grid and the script parser
+
+### Limits
+
+The grid stands in for FBInk's text placement (cells, centring, wrap); the
+`--fbink` screenshots show FBInk's real drawing, but with generic Kindle
+defaults, no real refresh and no panel. Tap coordinates come from the
+script, so the touch path from the panel (raw events, quirks of the real
+hardware) is only covered by the unit tests of the mapping. Those, the
+e-ink refresh and the feel of the UI stay in the device checklist.
