@@ -9,7 +9,7 @@
 [![Kindle](https://img.shields.io/badge/Kindle-jailbroken%2C%20FW%205.17%2B-informational)](#voraussetzungen)
 [![Lizenz](https://img.shields.io/github/license/dkuester/KindleStoryGraph)](LICENSE)
 
-[Installation](docs/install.de.md) · [Funktionen](#funktionen) · [Funktionsweise](#funktionsweise) · [Bauen](#bauen) · [Architektur](docs/architecture.md) · [Releases](https://github.com/dkuester/KindleStoryGraph/releases) · [English](README.md)
+[Installation](docs/install.de.md) · [Funktionen](#funktionen) · [Funktionsweise](#funktionsweise) · [Bauen](#bauen) · [Architektur](docs/architecture.md) · [Kindle-Notizen](docs/kindle-notes.md) · [Releases](https://github.com/dkuester/KindleStoryGraph/releases) · [English](README.md)
 
 </div>
 
@@ -19,10 +19,22 @@ während du weiter im nativen Kindle-Reader liest. Es ist das Gegenstück zu
 [NickelStorygraph](https://github.com/dkuester/NickelStorygraph) für Kobo und
 tolino und nutzt dieselbe Logik für StoryGraph-Login, Buchzuordnung und Sync.
 
-> [!NOTE]
-> **Stand:** Reader, StoryGraph-Client, Sync-Engine, KUAL-Paket und
-> Cross-Compile-Werkzeuge sind fertig, der Sync ist auf dem Gerät geprüft
-> (Kindle Basic 2024, Firmware 5.20.1). Weitere Pläne stehen in [ROADMAP.md](ROADMAP.md).
+> [!WARNING]
+> **Dieses Projekt ist eingestellt, das Repository ist archiviert.** Es hat wie
+> unten beschrieben funktioniert (geprüft auf einem Kindle Basic 2024,
+> Firmware 5.20.1), ich erwarte aber nicht, dass es zuverlässig weiterläuft.
+> StoryGraph hat keine öffentliche API, das Tool nutzt deshalb die eigenen
+> Endpunkte der Website mit Session-Cookies aus dem Browser, und die Anmeldung
+> von StoryGraph liegt hinter einer Cloudflare-Bot-Abfrage, die Programme
+> außerhalb eines Browsers meist nicht bestehen. Alles, was darauf aufbaut,
+> bleibt damit ein bewegliches Ziel.
+>
+> Falls du es benutzt hast: „Remove from StoryGraph“ (siehe unten) nimmt ein
+> synchronisiertes Buch wieder von deinem Regal. Nützlich bleiben kann
+> [docs/kindle-notes.md](docs/kindle-notes.md) (auf Englisch), eine Sammlung
+> dessen, was ich über Kindle-Mods und die Web-Endpunkte von StoryGraph gelernt
+> habe. Dieselbe Sync-Logik für Kobo und tolino lebt in
+> [NickelStorygraph](https://github.com/dkuester/NickelStorygraph) weiter.
 
 ---
 
@@ -98,7 +110,7 @@ das Release.
 |---|---|
 | Fehlermeldungen und Fragen | [Issues](https://github.com/dkuester/KindleStoryGraph/issues). Bitte Kindle-Modell, Firmware-Version und den passenden Ausschnitt aus `kindlestorygraph.log` angeben. **Cookies vorher aus Logs und Konfiguration entfernen.** |
 | Downloads | [Releases](https://github.com/dkuester/KindleStoryGraph/releases) |
-| Geplante Funktionen | [ROADMAP.md](ROADMAP.md) |
+| Offene Ideen (nicht weiterverfolgt) | [ROADMAP.md](ROADMAP.md) |
 | Frühere Historie | Pull-Requests bis v0.1.0 liegen im [archivierten Codeberg-Repo](https://codeberg.org/hortizept/KindleStoryGraph). |
 | Mitwirken | Pull-Requests gegen `main`; die CI muss grün sein. |
 
