@@ -9,7 +9,7 @@
 [![Kindle](https://img.shields.io/badge/Kindle-jailbroken%2C%20FW%205.17%2B-informational)](#requirements)
 [![License](https://img.shields.io/github/license/dkuester/KindleStoryGraph)](LICENSE)
 
-[Installation](docs/install.md) · [Features](#features) · [How it works](#how-it-works) · [Building](#building) · [Architecture](docs/architecture.md) · [Releases](https://github.com/dkuester/KindleStoryGraph/releases) · [Deutsch](README.de.md)
+[Installation](docs/install.md) · [Features](#features) · [How it works](#how-it-works) · [Building](#building) · [Architecture](docs/architecture.md) · [Kindle notes](docs/kindle-notes.md) · [Releases](https://github.com/dkuester/KindleStoryGraph/releases) · [Deutsch](README.de.md)
 
 </div>
 
@@ -20,10 +20,21 @@ counterpart to [NickelStorygraph](https://github.com/dkuester/NickelStorygraph)
 for Kobo and tolino, and uses the same StoryGraph login, book matching and sync
 logic.
 
-> [!NOTE]
-> **Status:** reader, StoryGraph client, sync engine, KUAL packaging and
-> cross-compile tooling are complete, and the sync is verified on-device
-> (Kindle Basic 2024, firmware 5.20.1). Future work is in [ROADMAP.md](ROADMAP.md).
+> [!WARNING]
+> **This project is discontinued and the repository is archived.** It worked as
+> described below (verified on a Kindle Basic 2024, firmware 5.20.1), but I do
+> not expect it to keep working reliably. StoryGraph has no public API, so the
+> tool talks to the website's own endpoints with session cookies copied from a
+> browser, and StoryGraph's sign-in sits behind a Cloudflare bot challenge that
+> non-browser clients usually cannot pass. That makes everything built on it a
+> moving target.
+>
+> If you used it: "Remove from StoryGraph" (see below) takes a synced book back
+> off your shelf. What may still be useful is
+> [docs/kindle-notes.md](docs/kindle-notes.md), a write-up of what I learned
+> about Kindle mods and StoryGraph's web endpoints. The same sync logic for
+> Kobo and tolino lives on in
+> [NickelStorygraph](https://github.com/dkuester/NickelStorygraph).
 
 ---
 
@@ -98,7 +109,7 @@ release.
 |---|---|
 | Bug reports and questions | [Issues](https://github.com/dkuester/KindleStoryGraph/issues). Please include Kindle model, firmware version and the relevant part of `kindlestorygraph.log`. **Remove cookies from logs and configs before posting.** |
 | Downloads | [Releases](https://github.com/dkuester/KindleStoryGraph/releases) |
-| Planned features | [ROADMAP.md](ROADMAP.md) |
+| Open ideas (not pursued) | [ROADMAP.md](ROADMAP.md) |
 | Earlier history | Pull requests up to v0.1.0 are in the [archived Codeberg repository](https://codeberg.org/hortizept/KindleStoryGraph). |
 | Contributing | Pull requests against `main`; CI must pass. |
 
